@@ -1,0 +1,21 @@
+# Local contest data is large and should not be committed.
+data/
+
+# Python/cache/editor noise.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment files.
+.env
+.env.*
+.venv/
+venv/
+
+# OS/editor files.
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
