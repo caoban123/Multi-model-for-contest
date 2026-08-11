@@ -166,6 +166,14 @@ python tools\text_query_benchmark.py --queries benchmarks\text_queries_l21.json 
 
 File CSV có cột `manual_judgement` và `manual_notes` để thành viên chấm thủ công Top-K. Nếu dùng snapshot local trên máy hiện tại, đặt `AIC_CLIP_MODEL_ID` như ví dụ phía trên và thêm `--clip-local-files-only`.
 
+Sinh HTML review để chấm nhanh bằng hình ảnh:
+
+```powershell
+python tools\benchmark_review_html.py --input artifacts\benchmarks\l21_text_benchmark.json --output artifacts\benchmarks\l21_text_review.html
+```
+
+Mở `artifacts\benchmarks\l21_text_review.html` trong trình duyệt, chọn `good`, `partial` hoặc `bad`, ghi notes rồi bấm `Export CSV`.
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.
