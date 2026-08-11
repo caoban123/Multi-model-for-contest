@@ -1,6 +1,9 @@
 # Local contest data is large and should not be committed.
 data/
 
+# Generated registries, indexes, caches, and reports that can be rebuilt.
+artifacts/
+
 # Python/cache/editor noise.
 __pycache__/
 *.py[cod]
