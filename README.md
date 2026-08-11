@@ -158,6 +158,14 @@ python tools\vector_search.py --registry artifacts\registry\data_registry.json -
 
 Không hard-code đường dẫn `D:\AIC` vào code. Thành viên khác khi pull repo có thể dùng model id mặc định `openai/clip-vit-base-patch32`; nếu chưa có cache local thì HuggingFace sẽ tải model khi chạy text query.
 
+Chạy benchmark text query L21:
+
+```powershell
+python tools\text_query_benchmark.py --queries benchmarks\text_queries_l21.json --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --require-keyframes --candidate-pool 25 --top-k 5 --max-frames-per-video 1 --output artifacts\benchmarks\l21_text_benchmark.json --csv-output artifacts\benchmarks\l21_text_benchmark.csv
+```
+
+File CSV có cột `manual_judgement` và `manual_notes` để thành viên chấm thủ công Top-K. Nếu dùng snapshot local trên máy hiện tại, đặt `AIC_CLIP_MODEL_ID` như ví dụ phía trên và thêm `--clip-local-files-only`.
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.
@@ -172,8 +180,8 @@ Không hard-code đường dẫn `D:\AIC` vào code. Thành viên khác khi pull
 
 Tiếp tục Phase 1 bằng chuẩn bị text query:
 
-1. Kiểm tra chất lượng text query CLIP trên nhiều query thử.
-2. Cải thiện schema/manifest và benchmark.
+1. Chấm thủ công `artifacts\benchmarks\l21_text_benchmark.csv`.
+2. Cải thiện schema/manifest dựa trên lỗi quan sát được.
 3. Sau khi có thêm keyframes, mở search ra ngoài L21.
 
 Chỉ sau đó mới quyết định có cần FAISS hay không.

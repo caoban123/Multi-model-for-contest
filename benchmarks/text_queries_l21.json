@@ -1,0 +1,52 @@
+[
+  {
+    "id": "q001",
+    "text": "a person walking outdoors",
+    "notes": "General action query"
+  },
+  {
+    "id": "q002",
+    "text": "a person riding a motorbike on the street",
+    "notes": "Vehicle and action"
+  },
+  {
+    "id": "q003",
+    "text": "people sitting at a table",
+    "notes": "Indoor social scene"
+  },
+  {
+    "id": "q004",
+    "text": "a close up of food on a plate",
+    "notes": "Object-centric food scene"
+  },
+  {
+    "id": "q005",
+    "text": "a crowd of people at an event",
+    "notes": "Crowd scene"
+  },
+  {
+    "id": "q006",
+    "text": "a computer screen or television screen",
+    "notes": "Screen object"
+  },
+  {
+    "id": "q007",
+    "text": "a car driving on a road",
+    "notes": "Vehicle scene"
+  },
+  {
+    "id": "q008",
+    "text": "a person standing in a kitchen",
+    "notes": "Indoor location"
+  },
+  {
+    "id": "q009",
+    "text": "a hand holding a phone",
+    "notes": "Small object interaction"
+  },
+  {
+    "id": "q010",
+    "text": "a person wearing a red shirt",
+    "notes": "Attribute query"
+  }
+]
