@@ -1,0 +1,17 @@
+[
+  {
+    "id": "q008",
+    "text": "a person standing in a kitchen",
+    "notes": "Weak location query from first judged benchmark"
+  },
+  {
+    "id": "q009",
+    "text": "a hand holding a phone",
+    "notes": "Weak interaction query from first judged benchmark"
+  },
+  {
+    "id": "q010",
+    "text": "a person wearing a red shirt",
+    "notes": "Weak attribute query from first judged benchmark"
+  }
+]

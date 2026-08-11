@@ -41,6 +41,12 @@ def main() -> int:
     parser.add_argument("--clip-local-files-only", action="store_true")
     parser.add_argument("--output", default="artifacts/benchmarks/l21_text_benchmark.json")
     parser.add_argument("--csv-output", default="artifacts/benchmarks/l21_text_benchmark.csv")
+    parser.add_argument(
+        "--csv-result-set",
+        choices=["results", "raw_results"],
+        default="results",
+        help="Which result list to export to CSV for manual judgement.",
+    )
     args = parser.parse_args()
 
     groups = {item.strip() for item in args.groups.split(",") if item.strip()}
@@ -84,12 +90,13 @@ def main() -> int:
             "text": query["text"],
             "notes": query.get("notes", ""),
             "search_ms": search_ms,
-            "raw_results": [asdict(result) for result in raw_results[: args.top_k]],
+            "raw_results": [asdict(result) for result in raw_results],
             "results": [asdict(result) for result in results],
             "video_groups": [asdict(result) for result in video_groups],
         }
         query_results.append(query_payload)
-        for result in results:
+        csv_results = raw_results if args.csv_result_set == "raw_results" else results
+        for result in csv_results:
             rows.append(
                 {
                     "query_id": query["id"],
@@ -113,6 +120,7 @@ def main() -> int:
         "groups": sorted(groups),
         "top_k": args.top_k,
         "candidate_pool": candidate_pool,
+        "csv_result_set": args.csv_result_set,
         "max_frames_per_video": args.max_frames_per_video,
         "index_source": index_source,
         "index_metadata": index_metadata,

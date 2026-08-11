@@ -192,6 +192,15 @@ Chạy object-fusion experiment offline, chỉ re-rank benchmark đã chấm và
 python tools\fusion_experiment.py --benchmark artifacts\benchmarks\l21_text_benchmark.json --judgements artifacts\benchmarks\l21_text_benchmark_judged.csv --object-root data\objects --object-weight 0.05 --top-k 5 --output artifacts\benchmarks\l21_fusion_experiment.json
 ```
 
+Tạo benchmark mở rộng cho các query yếu q008/q009/q010 với raw candidate pool 50:
+
+```powershell
+python tools\text_query_benchmark.py --queries benchmarks\text_queries_l21_weak.json --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --require-keyframes --candidate-pool 50 --top-k 5 --max-frames-per-video 1 --csv-result-set raw_results --output artifacts\benchmarks\l21_weak_text_benchmark_pool50.json --csv-output artifacts\benchmarks\l21_weak_text_benchmark_pool50.csv
+python tools\benchmark_review_html.py --input artifacts\benchmarks\l21_weak_text_benchmark_pool50.json --result-set raw_results --output artifacts\benchmarks\l21_weak_text_review_pool50.html
+```
+
+Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 candidates rồi export CSV. Fusion experiment chỉ nên chạy lại sau khi có file judged pool50.
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.

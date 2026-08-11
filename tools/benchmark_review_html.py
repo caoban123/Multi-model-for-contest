@@ -14,9 +14,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build a static HTML reviewer for text-query benchmark results.")
     parser.add_argument("--input", default="artifacts/benchmarks/l21_text_benchmark.json")
     parser.add_argument("--output", default="artifacts/benchmarks/l21_text_review.html")
+    parser.add_argument("--result-set", choices=["results", "raw_results"], default="results")
     args = parser.parse_args()
 
     payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
+    payload["_review_result_set"] = args.result_set
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_review_html(payload, output_path), encoding="utf-8")
@@ -25,7 +27,8 @@ def main() -> int:
 
 
 def render_review_html(payload: dict[str, Any], output_path: Path) -> str:
-    query_sections = "\n".join(render_query(query, output_path) for query in payload.get("queries", []))
+    result_set = str(payload.get("_review_result_set", "results"))
+    query_sections = "\n".join(render_query(query, output_path, result_set) for query in payload.get("queries", []))
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -195,6 +198,7 @@ def render_review_html(payload: dict[str, Any], output_path: Path) -> str:
       <div class="meta">
         <span>Queries: {html.escape(str(payload.get("query_count", len(payload.get("queries", [])))))}</span>
         <span>Top-K: {html.escape(str(payload.get("top_k", "")))}</span>
+        <span>Review set: {html.escape(result_set)}</span>
         <span>Index vectors: {html.escape(str(payload.get("index_vectors", "")))}</span>
       </div>
     </div>
@@ -245,11 +249,12 @@ def render_review_html(payload: dict[str, Any], output_path: Path) -> str:
 """
 
 
-def render_query(query: dict[str, Any], output_path: Path) -> str:
+def render_query(query: dict[str, Any], output_path: Path, result_set: str = "results") -> str:
     query_id = str(query.get("id", ""))
     query_text = str(query.get("text", ""))
     notes = str(query.get("notes", ""))
-    cards = "\n".join(render_result(query_id, query_text, result, output_path) for result in query.get("results", []))
+    results = query.get(result_set, query.get("results", []))
+    cards = "\n".join(render_result(query_id, query_text, result, output_path) for result in results)
     return f"""<section>
   <div class="query-head">
     <h2 class="query-title">{html.escape(query_id)} - {html.escape(query_text)}</h2>
