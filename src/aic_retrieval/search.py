@@ -138,6 +138,42 @@ def load_query_vector(path: Path) -> np.ndarray:
     return np.asarray(np.load(path), dtype=np.float32)
 
 
+def load_query_vector_from_asset(
+    registry: dict[str, Any],
+    repo_root: Path,
+    video_id: str,
+    keyframe_id: int,
+) -> np.ndarray:
+    asset = find_asset(registry, video_id)
+    feature_path = _repo_path(repo_root, asset["clip_feature_path"])
+    mapping_path = _repo_path(repo_root, asset["mapping_path"])
+    if feature_path is None:
+        raise ValueError(f"{video_id} has no CLIP feature path")
+    if mapping_path is None:
+        raise ValueError(f"{video_id} has no mapping path")
+
+    mapping_rows = read_mapping_rows(mapping_path)
+    row_index = None
+    for index, row in enumerate(mapping_rows):
+        if int(row["n"]) == keyframe_id:
+            row_index = index
+            break
+    if row_index is None:
+        raise ValueError(f"{video_id} has no keyframe_id {keyframe_id}")
+
+    feature = np.load(feature_path, mmap_mode="r")
+    if row_index >= len(feature):
+        raise ValueError(f"{video_id} keyframe_id {keyframe_id} maps outside feature rows")
+    return np.asarray(feature[row_index], dtype=np.float32)
+
+
+def find_asset(registry: dict[str, Any], video_id: str) -> dict[str, Any]:
+    for asset in registry["videos"]:
+        if asset["video_id"] == video_id:
+            return asset
+    raise ValueError(f"video_id not found in registry: {video_id}")
+
+
 def write_results(path: Path, results: list[SearchResult]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"results": [asdict(result) for result in results]}

@@ -132,6 +132,12 @@ Search bằng index đã lưu:
 python tools\vector_search.py --index-dir artifacts\indexes\l21_numpy --query-vector artifacts\query\L21_V001_001.npy --groups L21 --require-keyframes --top-k 5 --output artifacts\registry\sample_search_results_from_index.json
 ```
 
+Search debug trực tiếp bằng video/keyframe, không cần tự tạo query `.npy`:
+
+```powershell
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-from-video-id L21_V001 --query-keyframe-id 1 --groups L21 --require-keyframes --top-k 5 --output artifacts\registry\sample_search_results_from_debug_query.json
+```
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.
@@ -144,10 +150,10 @@ python tools\vector_search.py --index-dir artifacts\indexes\l21_numpy --query-ve
 
 ## Bước Tiếp Theo Đề Xuất
 
-Tiếp tục Phase 1 bằng debug search ergonomics và chuẩn bị text query:
+Tiếp tục Phase 1 bằng grouping/diversity và chuẩn bị text query:
 
-1. Thêm tùy chọn debug `--query-from-video-id` để lấy vector từ video/keyframe mà không cần tự tạo `.npy`.
-2. Thêm grouping/diversity cơ bản theo video.
+1. Thêm grouping/diversity cơ bản theo video để Top-K không bị nhiều frame gần nhau chiếm hết.
+2. Thêm tùy chọn export kết quả grouped theo video.
 3. Quyết định text encoder local trước khi làm Textual KIS thật.
 
 Chỉ sau đó mới quyết định có cần FAISS và text encoder hay không.

@@ -1,7 +1,13 @@
 import numpy as np
 import pytest
 
-from aic_retrieval.search import load_numpy_index, normalize_query, save_numpy_index, search_numpy_index
+from aic_retrieval.search import (
+    find_asset,
+    load_numpy_index,
+    normalize_query,
+    save_numpy_index,
+    search_numpy_index,
+)
 from aic_retrieval.search import FrameRef
 
 
@@ -46,3 +52,16 @@ def test_save_and_load_numpy_index_roundtrip(tmp_path) -> None:
     np.testing.assert_allclose(loaded_index, index)
     assert loaded_refs == refs
     assert loaded_metadata == metadata
+
+
+def test_find_asset_returns_matching_video() -> None:
+    registry = {"videos": [{"video_id": "L21_V001"}, {"video_id": "L21_V002"}]}
+
+    assert find_asset(registry, "L21_V002") == {"video_id": "L21_V002"}
+
+
+def test_find_asset_rejects_missing_video() -> None:
+    registry = {"videos": [{"video_id": "L21_V001"}]}
+
+    with pytest.raises(ValueError, match="video_id not found"):
+        find_asset(registry, "L21_V999")

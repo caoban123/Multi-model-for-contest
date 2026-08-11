@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
 
 from aic_retrieval.search import (
     build_numpy_index,
+    load_query_vector_from_asset,
     load_numpy_index,
     load_query_vector,
     load_registry,
@@ -25,7 +26,9 @@ from aic_retrieval.search import (
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a NumPy cosine search over CLIP image vectors.")
     parser.add_argument("--registry", default="artifacts/registry/data_registry.json")
-    parser.add_argument("--query-vector", required=True, help="Path to a .npy query vector with dim 512.")
+    parser.add_argument("--query-vector", default=None, help="Path to a .npy query vector with dim 512.")
+    parser.add_argument("--query-from-video-id", default=None, help="Debug: use a keyframe vector from this video.")
+    parser.add_argument("--query-keyframe-id", type=int, default=None, help="Debug: keyframe id for --query-from-video-id.")
     parser.add_argument("--groups", default="L21", help="Comma-separated groups to search, e.g. L21,L22.")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--require-keyframes", action="store_true")
@@ -39,6 +42,7 @@ def main() -> int:
 
     groups = {item.strip() for item in args.groups.split(",") if item.strip()}
     start = time.perf_counter()
+    registry = None
     index_source = "rebuilt"
     index_metadata = {}
     if args.index_dir:
@@ -55,7 +59,23 @@ def main() -> int:
     index_ready_ms = (time.perf_counter() - start) * 1000
 
     search_start = time.perf_counter()
-    query = load_query_vector(Path(args.query_vector))
+    query_source = ""
+    if args.query_vector:
+        query = load_query_vector(Path(args.query_vector))
+        query_source = args.query_vector
+    elif args.query_from_video_id and args.query_keyframe_id is not None:
+        if registry is None:
+            registry = load_registry(Path(args.registry))
+        query = load_query_vector_from_asset(
+            registry,
+            repo_root=ROOT,
+            video_id=args.query_from_video_id,
+            keyframe_id=args.query_keyframe_id,
+        )
+        query_source = f"{args.query_from_video_id}:{args.query_keyframe_id}"
+    else:
+        raise ValueError("provide --query-vector or both --query-from-video-id and --query-keyframe-id")
+
     results = search_numpy_index(index, refs, query, top_k=args.top_k)
     search_ms = (time.perf_counter() - search_start) * 1000
     elapsed_ms = (time.perf_counter() - start) * 1000
@@ -67,6 +87,7 @@ def main() -> int:
         "index_metadata": index_metadata,
         "index_vectors": int(index.shape[0]),
         "index_dim": int(index.shape[1]),
+        "query_source": query_source,
         "index_ready_ms": index_ready_ms,
         "search_ms": search_ms,
         "elapsed_ms": elapsed_ms,
