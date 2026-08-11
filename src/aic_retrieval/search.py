@@ -33,6 +33,19 @@ class SearchResult:
     keyframe_path: str | None
 
 
+@dataclass(frozen=True)
+class VideoGroupResult:
+    rank: int
+    video_id: str
+    group: str
+    best_score: float
+    best_keyframe_id: int
+    best_frame_idx: int
+    best_pts_time: float
+    frame_count: int
+    frames: list[SearchResult]
+
+
 def load_registry(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -132,6 +145,56 @@ def search_numpy_index(index: np.ndarray, refs: list[FrameRef], query: np.ndarra
             )
         )
     return results
+
+
+def diversify_results_by_video(results: list[SearchResult], max_frames_per_video: int) -> list[SearchResult]:
+    if max_frames_per_video <= 0:
+        raise ValueError("max_frames_per_video must be positive")
+
+    counts: dict[str, int] = {}
+    diversified: list[SearchResult] = []
+    for result in results:
+        count = counts.get(result.video_id, 0)
+        if count >= max_frames_per_video:
+            continue
+        counts[result.video_id] = count + 1
+        diversified.append(_rerank_frame(result, len(diversified) + 1))
+    return diversified
+
+
+def group_results_by_video(results: list[SearchResult], max_frames_per_video: int) -> list[VideoGroupResult]:
+    if max_frames_per_video <= 0:
+        raise ValueError("max_frames_per_video must be positive")
+
+    grouped: dict[str, list[SearchResult]] = {}
+    order: list[str] = []
+    for result in results:
+        if result.video_id not in grouped:
+            grouped[result.video_id] = []
+            order.append(result.video_id)
+        if len(grouped[result.video_id]) < max_frames_per_video:
+            grouped[result.video_id].append(result)
+
+    video_results: list[VideoGroupResult] = []
+    for video_id in order:
+        frames = grouped[video_id]
+        if not frames:
+            continue
+        best = frames[0]
+        video_results.append(
+            VideoGroupResult(
+                rank=len(video_results) + 1,
+                video_id=video_id,
+                group=best.group,
+                best_score=best.score,
+                best_keyframe_id=best.keyframe_id,
+                best_frame_idx=best.frame_idx,
+                best_pts_time=best.pts_time,
+                frame_count=len(frames),
+                frames=[_rerank_frame(frame, idx) for idx, frame in enumerate(frames, start=1)],
+            )
+        )
+    return video_results
 
 
 def load_query_vector(path: Path) -> np.ndarray:
@@ -245,3 +308,17 @@ def _repo_path(repo_root: Path, value: str | None) -> Path | None:
 
 def _relative(path: Path, root: Path) -> str:
     return str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+
+
+def _rerank_frame(result: SearchResult, rank: int) -> SearchResult:
+    return SearchResult(
+        rank=rank,
+        score=result.score,
+        video_id=result.video_id,
+        group=result.group,
+        keyframe_id=result.keyframe_id,
+        frame_idx=result.frame_idx,
+        pts_time=result.pts_time,
+        fps=result.fps,
+        keyframe_path=result.keyframe_path,
+    )

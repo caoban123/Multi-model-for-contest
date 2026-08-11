@@ -14,6 +14,8 @@ if str(SRC) not in sys.path:
 
 from aic_retrieval.search import (
     build_numpy_index,
+    diversify_results_by_video,
+    group_results_by_video,
     load_query_vector_from_asset,
     load_numpy_index,
     load_query_vector,
@@ -31,6 +33,14 @@ def main() -> int:
     parser.add_argument("--query-keyframe-id", type=int, default=None, help="Debug: keyframe id for --query-from-video-id.")
     parser.add_argument("--groups", default="L21", help="Comma-separated groups to search, e.g. L21,L22.")
     parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument(
+        "--candidate-pool",
+        type=int,
+        default=None,
+        help="Raw candidate pool size before grouping/diversity. Defaults to top-k.",
+    )
+    parser.add_argument("--max-frames-per-video", type=int, default=1)
+    parser.add_argument("--group-by-video", action="store_true")
     parser.add_argument("--require-keyframes", action="store_true")
     parser.add_argument(
         "--index-dir",
@@ -76,13 +86,21 @@ def main() -> int:
     else:
         raise ValueError("provide --query-vector or both --query-from-video-id and --query-keyframe-id")
 
-    results = search_numpy_index(index, refs, query, top_k=args.top_k)
+    candidate_pool = args.candidate_pool or args.top_k
+    if candidate_pool < args.top_k:
+        candidate_pool = args.top_k
+    raw_results = search_numpy_index(index, refs, query, top_k=candidate_pool)
+    diversified_results = diversify_results_by_video(raw_results, args.max_frames_per_video)[: args.top_k]
+    video_groups = group_results_by_video(raw_results, args.max_frames_per_video)[: args.top_k]
     search_ms = (time.perf_counter() - search_start) * 1000
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     payload = {
         "groups": sorted(groups),
         "top_k": args.top_k,
+        "candidate_pool": candidate_pool,
+        "max_frames_per_video": args.max_frames_per_video,
+        "group_by_video": args.group_by_video,
         "index_source": index_source,
         "index_metadata": index_metadata,
         "index_vectors": int(index.shape[0]),
@@ -91,12 +109,14 @@ def main() -> int:
         "index_ready_ms": index_ready_ms,
         "search_ms": search_ms,
         "elapsed_ms": elapsed_ms,
-        "results": [asdict(result) for result in results],
+        "raw_results": [asdict(result) for result in raw_results[: args.top_k]],
+        "results": [asdict(result) for result in diversified_results],
+        "video_groups": [asdict(result) for result in video_groups] if args.group_by_video else [],
     }
 
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if args.output:
-        write_results(Path(args.output), results)
+        write_results(Path(args.output), diversified_results)
 
     return 0
 

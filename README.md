@@ -138,6 +138,12 @@ Search debug trực tiếp bằng video/keyframe, không cần tự tạo query 
 python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-from-video-id L21_V001 --query-keyframe-id 1 --groups L21 --require-keyframes --top-k 5 --output artifacts\registry\sample_search_results_from_debug_query.json
 ```
 
+Search có grouping/diversity theo video:
+
+```powershell
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-from-video-id L21_V001 --query-keyframe-id 1 --groups L21 --require-keyframes --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video --output artifacts\registry\sample_search_results_grouped.json
+```
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.
@@ -150,10 +156,10 @@ python tools\vector_search.py --registry artifacts\registry\data_registry.json -
 
 ## Bước Tiếp Theo Đề Xuất
 
-Tiếp tục Phase 1 bằng grouping/diversity và chuẩn bị text query:
+Tiếp tục Phase 1 bằng chuẩn bị text query:
 
-1. Thêm grouping/diversity cơ bản theo video để Top-K không bị nhiều frame gần nhau chiếm hết.
-2. Thêm tùy chọn export kết quả grouped theo video.
-3. Quyết định text encoder local trước khi làm Textual KIS thật.
+1. Quyết định text encoder local trước khi làm Textual KIS thật.
+2. Nếu chưa duyệt model, tiếp tục cải thiện schema/manifest và benchmark.
+3. Sau khi có text encoder, nối text query vào index L21 trước.
 
 Chỉ sau đó mới quyết định có cần FAISS và text encoder hay không.

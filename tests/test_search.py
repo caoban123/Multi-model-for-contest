@@ -2,7 +2,9 @@ import numpy as np
 import pytest
 
 from aic_retrieval.search import (
+    diversify_results_by_video,
     find_asset,
+    group_results_by_video,
     load_numpy_index,
     normalize_query,
     save_numpy_index,
@@ -65,3 +67,48 @@ def test_find_asset_rejects_missing_video() -> None:
 
     with pytest.raises(ValueError, match="video_id not found"):
         find_asset(registry, "L21_V999")
+
+
+def test_diversify_results_by_video_limits_frames_per_video() -> None:
+    results = [
+        _result(1, "V1", 1, 0.9),
+        _result(2, "V1", 2, 0.8),
+        _result(3, "V2", 1, 0.7),
+    ]
+
+    diversified = diversify_results_by_video(results, max_frames_per_video=1)
+
+    assert [(item.rank, item.video_id, item.keyframe_id) for item in diversified] == [
+        (1, "V1", 1),
+        (2, "V2", 1),
+    ]
+
+
+def test_group_results_by_video_keeps_best_video_order() -> None:
+    results = [
+        _result(1, "V1", 1, 0.9),
+        _result(2, "V1", 2, 0.8),
+        _result(3, "V2", 1, 0.7),
+    ]
+
+    grouped = group_results_by_video(results, max_frames_per_video=2)
+
+    assert [item.video_id for item in grouped] == ["V1", "V2"]
+    assert grouped[0].best_score == pytest.approx(0.9)
+    assert [frame.keyframe_id for frame in grouped[0].frames] == [1, 2]
+
+
+def _result(rank: int, video_id: str, keyframe_id: int, score: float):
+    from aic_retrieval.search import SearchResult
+
+    return SearchResult(
+        rank=rank,
+        score=score,
+        video_id=video_id,
+        group="L21",
+        keyframe_id=keyframe_id,
+        frame_idx=keyframe_id * 10,
+        pts_time=float(keyframe_id),
+        fps=30.0,
+        keyframe_path=None,
+    )
