@@ -7,7 +7,7 @@ Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. D�
 Mọi thành viên và AI agent phải đọc theo thứ tự:
 
 1. `.agent/codex.md` - protocol bắt buộc khi làm việc.
-2. `reports/Phase_1_11-08-2026_2.md` - trạng thái mới nhất hiện tại.
+2. `reports/Phase_1_11-08-2026_6.md` - trạng thái mới nhất hiện tại.
 3. `plan/PLAN_AIC2026_VIDEO_RETRIEVAL.md` - kế hoạch tổng thể.
 4. File phase liên quan trong `plan/`, ví dụ `plan/02_PHASE_1_DATA_REGISTRY_BASELINE.md`.
 
@@ -21,14 +21,12 @@ Phase hiện tại: **Phase 1 - Data registry và baseline retrieval**.
 
 - Scanner tạo data registry.
 - Validator kiểm tra CLIP feature, mapping, metadata, object, keyframe.
-- Baseline NumPy cosine search cho L21 bằng query vector `.npy`.
+- Baseline NumPy cosine search cho L21 bằng query vector `.npy` hoặc text query CLIP.
 - Test tối thiểu bằng pytest.
 
 Chưa có:
 
-- Text encoder cho query ngôn ngữ tự nhiên.
 - FAISS index.
-- Persistent vector index.
 - UI.
 - Q&A.
 - TRAKE.
@@ -71,8 +69,9 @@ Yêu cầu hiện tại:
 - Python 3.10+
 - NumPy
 - pytest
+- torch, transformers cho text query CLIP
 
-Không cần cài FAISS, OpenCLIP, CLIP hoặc tải model ở thời điểm này.
+Không cần cài FAISS hoặc OpenCLIP ở thời điểm này. Text query dùng HuggingFace `openai/clip-vit-base-patch32`; lần chạy đầu trên máy mới có thể cần tải model khoảng 600 MB.
 
 ## Lệnh Hay Dùng
 
@@ -144,6 +143,21 @@ Search có grouping/diversity theo video:
 python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-from-video-id L21_V001 --query-keyframe-id 1 --groups L21 --require-keyframes --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video --output artifacts\registry\sample_search_results_grouped.json
 ```
 
+Search bằng text query CLIP:
+
+```powershell
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-text "a person walking" --groups L21 --require-keyframes --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video --output artifacts\registry\sample_search_results_text.json
+```
+
+Máy hiện tại có sẵn snapshot CLIP ở `D:\AIC`. Có thể chạy offline/local-only bằng cách đặt biến môi trường:
+
+```powershell
+$env:AIC_CLIP_MODEL_ID="D:\AIC\.cache\huggingface\hub\models--openai--clip-vit-base-patch32\snapshots\3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-text "a person walking" --clip-local-files-only --groups L21 --require-keyframes --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video
+```
+
+Không hard-code đường dẫn `D:\AIC` vào code. Thành viên khác khi pull repo có thể dùng model id mặc định `openai/clip-vit-base-patch32`; nếu chưa có cache local thì HuggingFace sẽ tải model khi chạy text query.
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.
@@ -158,8 +172,8 @@ python tools\vector_search.py --registry artifacts\registry\data_registry.json -
 
 Tiếp tục Phase 1 bằng chuẩn bị text query:
 
-1. Quyết định text encoder local trước khi làm Textual KIS thật.
-2. Nếu chưa duyệt model, tiếp tục cải thiện schema/manifest và benchmark.
-3. Sau khi có text encoder, nối text query vào index L21 trước.
+1. Kiểm tra chất lượng text query CLIP trên nhiều query thử.
+2. Cải thiện schema/manifest và benchmark.
+3. Sau khi có thêm keyframes, mở search ra ngoài L21.
 
-Chỉ sau đó mới quyết định có cần FAISS và text encoder hay không.
+Chỉ sau đó mới quyết định có cần FAISS hay không.

@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+import tools.vector_search as vector_search
 from aic_retrieval.search import (
     diversify_results_by_video,
     find_asset,
@@ -96,6 +97,47 @@ def test_group_results_by_video_keeps_best_video_order() -> None:
     assert [item.video_id for item in grouped] == ["V1", "V2"]
     assert grouped[0].best_score == pytest.approx(0.9)
     assert [frame.keyframe_id for frame in grouped[0].frames] == [1, 2]
+
+
+def test_vector_search_accepts_text_query(tmp_path, monkeypatch, capsys) -> None:
+    index_dir = tmp_path / "index"
+    index = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    refs = [
+        FrameRef("V1", "L21", 1, 10, 0.0, 30.0, None),
+        FrameRef("V2", "L21", 1, 20, 0.0, 30.0, None),
+    ]
+    save_numpy_index(index_dir, index, refs, {"groups": ["L21"]})
+
+    def fake_encode_clip_text(text, model_id, cache_dir, local_files_only):
+        assert text == "a red car"
+        assert model_id == "mock-model"
+        assert str(cache_dir) == "D:\\AIC\\.cache\\huggingface"
+        assert local_files_only is True
+        return np.array([0.0, 1.0], dtype=np.float32)
+
+    monkeypatch.setattr(vector_search, "encode_clip_text", fake_encode_clip_text)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "vector_search.py",
+            "--index-dir",
+            str(index_dir),
+            "--query-text",
+            "a red car",
+            "--clip-model-id",
+            "mock-model",
+            "--clip-cache-dir",
+            "D:\\AIC\\.cache\\huggingface",
+            "--clip-local-files-only",
+            "--top-k",
+            "1",
+        ],
+    )
+
+    assert vector_search.main() == 0
+    payload = capsys.readouterr().out
+    assert '"query_source": "text:a red car"' in payload
+    assert '"video_id": "V2"' in payload
 
 
 def _result(rank: int, video_id: str, keyframe_id: int, score: float):
