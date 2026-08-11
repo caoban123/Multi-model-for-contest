@@ -174,6 +174,18 @@ python tools\benchmark_review_html.py --input artifacts\benchmarks\l21_text_benc
 
 Mở `artifacts\benchmarks\l21_text_review.html` trong trình duyệt, chọn `good`, `partial` hoặc `bad`, ghi notes rồi bấm `Export CSV`.
 
+Tóm tắt CSV đã chấm:
+
+```powershell
+python tools\summarize_benchmark_judgements.py --input artifacts\benchmarks\l21_text_benchmark_judged.csv --output artifacts\benchmarks\l21_text_judgement_summary.json
+```
+
+Inspect object detections của các dòng `bad`/`partial` trước khi thiết kế fusion:
+
+```powershell
+python tools\inspect_judged_objects.py --input artifacts\benchmarks\l21_text_benchmark_judged.csv --object-root data\objects --judgements bad,partial --top-n 8 --output artifacts\benchmarks\l21_judged_object_inspection.json
+```
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.
