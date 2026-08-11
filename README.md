@@ -120,6 +120,18 @@ frame_idx=0
 keyframe_path=data/keyframes/L21_V001/001.jpg
 ```
 
+Build persistent NumPy index cho L21:
+
+```powershell
+python tools\build_numpy_index.py --registry artifacts\registry\data_registry.json --groups L21 --require-keyframes --output-dir artifacts\indexes\l21_numpy
+```
+
+Search bằng index đã lưu:
+
+```powershell
+python tools\vector_search.py --index-dir artifacts\indexes\l21_numpy --query-vector artifacts\query\L21_V001_001.npy --groups L21 --require-keyframes --top-k 5 --output artifacts\registry\sample_search_results_from_index.json
+```
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.
@@ -132,12 +144,10 @@ keyframe_path=data/keyframes/L21_V001/001.jpg
 
 ## Bước Tiếp Theo Đề Xuất
 
-Tiếp tục Phase 1 bằng persistent local NumPy index cho L21:
+Tiếp tục Phase 1 bằng debug search ergonomics và chuẩn bị text query:
 
-1. Build normalized L21 vector matrix một lần.
-2. Lưu matrix và frame refs vào `artifacts/indexes/l21_numpy`.
-3. Cho `tools/vector_search.py` load index đã lưu nếu có.
-4. Đo riêng latency build index và latency search.
+1. Thêm tùy chọn debug `--query-from-video-id` để lấy vector từ video/keyframe mà không cần tự tạo `.npy`.
+2. Thêm grouping/diversity cơ bản theo video.
+3. Quyết định text encoder local trước khi làm Textual KIS thật.
 
 Chỉ sau đó mới quyết định có cần FAISS và text encoder hay không.
-

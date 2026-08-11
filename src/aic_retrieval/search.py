@@ -76,6 +76,35 @@ def build_numpy_index(
     return normalize_rows(matrix), refs
 
 
+def save_numpy_index(index_dir: Path, index: np.ndarray, refs: list[FrameRef], metadata: dict[str, Any]) -> None:
+    index_dir.mkdir(parents=True, exist_ok=True)
+    np.save(index_dir / "vectors.npy", index.astype(np.float32, copy=False))
+    (index_dir / "refs.json").write_text(
+        json.dumps([asdict(ref) for ref in refs], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (index_dir / "metadata.json").write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_numpy_index(index_dir: Path) -> tuple[np.ndarray, list[FrameRef], dict[str, Any]]:
+    vectors_path = index_dir / "vectors.npy"
+    refs_path = index_dir / "refs.json"
+    metadata_path = index_dir / "metadata.json"
+    if not vectors_path.exists() or not refs_path.exists():
+        raise FileNotFoundError(f"missing NumPy index files in {index_dir}")
+
+    index = np.asarray(np.load(vectors_path, mmap_mode="r"), dtype=np.float32)
+    refs_payload = json.loads(refs_path.read_text(encoding="utf-8"))
+    refs = [FrameRef(**item) for item in refs_payload]
+    metadata = {}
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    return index, refs, metadata
+
+
 def search_numpy_index(index: np.ndarray, refs: list[FrameRef], query: np.ndarray, top_k: int) -> list[SearchResult]:
     query_vector = normalize_query(query, expected_dim=index.shape[1])
     scores = index @ query_vector
@@ -180,4 +209,3 @@ def _repo_path(repo_root: Path, value: str | None) -> Path | None:
 
 def _relative(path: Path, root: Path) -> str:
     return str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
-
