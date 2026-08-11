@@ -186,6 +186,12 @@ Inspect object detections của các dòng `bad`/`partial` trước khi thiết 
 python tools\inspect_judged_objects.py --input artifacts\benchmarks\l21_text_benchmark_judged.csv --object-root data\objects --judgements bad,partial --top-n 8 --output artifacts\benchmarks\l21_judged_object_inspection.json
 ```
 
+Chạy object-fusion experiment offline, chỉ re-rank benchmark đã chấm và không thay đổi search mặc định:
+
+```powershell
+python tools\fusion_experiment.py --benchmark artifacts\benchmarks\l21_text_benchmark.json --judgements artifacts\benchmarks\l21_text_benchmark_judged.csv --object-root data\objects --object-weight 0.05 --top-k 5 --output artifacts\benchmarks\l21_fusion_experiment.json
+```
+
 ## Quy Tắc Làm Việc
 
 - Luôn đọc report mới nhất trước khi làm.
