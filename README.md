@@ -7,7 +7,7 @@ Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. D�
 Mọi thành viên và AI agent phải đọc theo thứ tự:
 
 1. `.agent/codex.md` - protocol bắt buộc khi làm việc.
-2. `reports/Phase_1_11-08-2026_6.md` - trạng thái mới nhất hiện tại.
+2. `reports/Phase_1_12-08-2026_5.md` - trạng thái mới nhất hiện tại.
 3. `plan/PLAN_AIC2026_VIDEO_RETRIEVAL.md` - kế hoạch tổng thể.
 4. File phase liên quan trong `plan/`, ví dụ `plan/02_PHASE_1_DATA_REGISTRY_BASELINE.md`.
 
@@ -199,6 +199,14 @@ python tools\fusion_experiment.py --benchmark artifacts\benchmarks\l21_weak_text
 ```
 
 Kết quả hiện tại: object-only và phone-hand interaction heuristic đều không cải thiện pool50; chưa bật fusion vào search mặc định.
+
+Audit encoding và coverage metadata:
+
+```powershell
+python tools\audit_metadata.py --media-dir data\media-info --output artifacts\metadata\media_info_audit.json --sample-limit 10
+```
+
+Kết quả hiện tại: 873 JSON đọc được, 0 lỗi JSON, 0 marker mojibake, 0 control character. Nếu PowerShell hiển thị chữ Việt bị sai, đó là vấn đề console encoding chứ không phải file metadata hỏng.
 
 Tạo benchmark mở rộng cho các query yếu q008/q009/q010 với raw candidate pool 50:
 
