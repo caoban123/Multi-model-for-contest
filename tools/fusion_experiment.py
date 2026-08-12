@@ -22,6 +22,8 @@ def main() -> int:
     parser.add_argument("--judgements", default="artifacts/benchmarks/l21_text_benchmark_judged.csv")
     parser.add_argument("--object-root", default="data/objects")
     parser.add_argument("--object-weight", type=float, default=0.05)
+    parser.add_argument("--interaction-weight", type=float, default=0.0)
+    parser.add_argument("--result-set", choices=["results", "raw_results"], default="results")
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--output", default="artifacts/benchmarks/l21_fusion_experiment.json")
     args = parser.parse_args()
@@ -35,12 +37,13 @@ def main() -> int:
     for query in benchmark.get("queries", []):
         query_id = str(query.get("id", ""))
         query_text = str(query.get("text", ""))
-        baseline_results = query.get("results", [])[: args.top_k]
+        baseline_results = query.get(args.result_set, query.get("results", []))[: args.top_k]
         fused_results = rerank_results_with_objects(
             query_text,
             baseline_results,
             object_root=Path(args.object_root),
             object_weight=args.object_weight,
+            interaction_weight=args.interaction_weight,
         )[: args.top_k]
 
         baseline_ranked = attach_judgements(baseline_results, judgement_lookup, query_id)
@@ -72,6 +75,8 @@ def main() -> int:
         "judgements": args.judgements,
         "object_root": args.object_root,
         "object_weight": args.object_weight,
+        "interaction_weight": args.interaction_weight,
+        "result_set": args.result_set,
         "top_k": args.top_k,
         "query_count": query_count,
         "baseline": average_metrics(baseline_totals, query_count),
@@ -88,6 +93,8 @@ def main() -> int:
             {
                 "output": str(output),
                 "object_weight": args.object_weight,
+                "interaction_weight": args.interaction_weight,
+                "result_set": args.result_set,
                 "baseline": payload["baseline"],
                 "fusion": payload["fusion"],
                 "delta": payload["delta"],
@@ -135,6 +142,8 @@ def metrics_for_ranked(results: list[dict[str, Any]]) -> dict[str, float]:
             "good_or_partial_at_k": 0.0,
             "bad_at_k": 0.0,
             "mean_relevance_at_k": 0.0,
+            "mrr_good": 0.0,
+            "ndcg_at_k": 0.0,
             "top1_good": 0.0,
             "top1_bad": 0.0,
             "top1_relevance": 0.0,
@@ -147,6 +156,8 @@ def metrics_for_ranked(results: list[dict[str, Any]]) -> dict[str, float]:
         "good_or_partial_at_k": sum(1 for item in judgements if item in {"good", "partial"}) / k,
         "bad_at_k": sum(1 for item in judgements if item == "bad") / k,
         "mean_relevance_at_k": sum(relevance) / k,
+        "mrr_good": reciprocal_rank(judgements, "good"),
+        "ndcg_at_k": ndcg(relevance),
         "top1_good": 1.0 if judgements[0] == "good" else 0.0,
         "top1_bad": 1.0 if judgements[0] == "bad" else 0.0,
         "top1_relevance": relevance[0],
@@ -178,6 +189,30 @@ def relevance_score(judgement: str) -> float:
     if judgement == "partial":
         return 0.5
     return 0.0
+
+
+def reciprocal_rank(judgements: list[str], target: str) -> float:
+    for index, judgement in enumerate(judgements, start=1):
+        if judgement == target:
+            return 1.0 / index
+    return 0.0
+
+
+def ndcg(relevance: list[float]) -> float:
+    if not relevance:
+        return 0.0
+    dcg = sum(value / log2_rank(index) for index, value in enumerate(relevance, start=1))
+    ideal = sorted(relevance, reverse=True)
+    idcg = sum(value / log2_rank(index) for index, value in enumerate(ideal, start=1))
+    if idcg == 0:
+        return 0.0
+    return dcg / idcg
+
+
+def log2_rank(rank: int) -> float:
+    import math
+
+    return math.log2(rank + 1)
 
 
 if __name__ == "__main__":

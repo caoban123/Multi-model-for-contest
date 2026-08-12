@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from aic_retrieval.fusion import matching_rules, rerank_results_with_objects, score_objects_for_query
+from aic_retrieval.fusion import (
+    matching_rules,
+    rerank_results_with_objects,
+    score_interactions_for_query,
+    score_objects_for_query,
+)
 import tools.fusion_experiment as fusion_experiment
 
 
@@ -35,7 +40,13 @@ def test_rerank_results_with_objects_can_promote_matching_candidate(tmp_path) ->
         object_dir = tmp_path / video_id
         object_dir.mkdir()
         (object_dir / "001.json").write_text(
-            json.dumps({"detection_class_entities": ["Mobile phone"], "detection_scores": [str(score)]}),
+            json.dumps(
+                {
+                    "detection_class_entities": ["Mobile phone"],
+                    "detection_scores": [str(score)],
+                    "detection_boxes": [[0.1, 0.1, 0.2, 0.2]],
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -50,6 +61,23 @@ def test_rerank_results_with_objects_can_promote_matching_candidate(tmp_path) ->
     assert reranked[0]["baseline_rank"] == 2
 
 
+def test_score_interactions_for_query_scores_phone_near_hand(tmp_path) -> None:
+    object_dir = tmp_path / "V1"
+    object_dir.mkdir()
+    (object_dir / "001.json").write_text(
+        json.dumps(
+            {
+                "detection_class_entities": ["Mobile phone", "Human hand"],
+                "detection_scores": ["0.9", "0.8"],
+                "detection_boxes": [[0.1, 0.1, 0.2, 0.2], [0.12, 0.12, 0.22, 0.22]],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert score_interactions_for_query("a hand holding a phone", tmp_path, "V1", 1) > 0.5
+
+
 def test_fusion_experiment_metrics_for_ranked() -> None:
     metrics = fusion_experiment.metrics_for_ranked(
         [
@@ -62,5 +90,7 @@ def test_fusion_experiment_metrics_for_ranked() -> None:
     assert metrics["good_at_k"] == pytest.approx(1 / 3)
     assert metrics["good_or_partial_at_k"] == pytest.approx(2 / 3)
     assert metrics["mean_relevance_at_k"] == pytest.approx(0.5)
+    assert metrics["mrr_good"] == pytest.approx(0.5)
+    assert metrics["ndcg_at_k"] > 0.5
     assert metrics["top1_bad"] == 1.0
     assert metrics["top1_relevance"] == 0.0

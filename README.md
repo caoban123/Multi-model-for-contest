@@ -192,6 +192,14 @@ Chạy object-fusion experiment offline, chỉ re-rank benchmark đã chấm và
 python tools\fusion_experiment.py --benchmark artifacts\benchmarks\l21_text_benchmark.json --judgements artifacts\benchmarks\l21_text_benchmark_judged.csv --object-root data\objects --object-weight 0.05 --top-k 5 --output artifacts\benchmarks\l21_fusion_experiment.json
 ```
 
+Với benchmark pool50, dùng `raw_results` để đánh giá đúng toàn bộ candidate đã chấm:
+
+```powershell
+python tools\fusion_experiment.py --benchmark artifacts\benchmarks\l21_weak_text_benchmark_pool50.json --judgements artifacts\benchmarks\l21_text_benchmark_judged.csv --object-root data\objects --result-set raw_results --object-weight 0.05 --interaction-weight 0.50 --top-k 50 --output artifacts\benchmarks\l21_weak_pool50_fusion_interaction.json
+```
+
+Kết quả hiện tại: object-only và phone-hand interaction heuristic đều không cải thiện pool50; chưa bật fusion vào search mặc định.
+
 Tạo benchmark mở rộng cho các query yếu q008/q009/q010 với raw candidate pool 50:
 
 ```powershell

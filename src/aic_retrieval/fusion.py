@@ -79,6 +79,7 @@ class FusedResult:
     keyframe_id: int
     clip_score: float
     object_score: float
+    interaction_score: float
     fused_score: float
     matched_rules: list[str]
     matched_entities: list[dict[str, Any]]
@@ -90,6 +91,7 @@ def rerank_results_with_objects(
     results: list[dict[str, Any]],
     object_root: Path,
     object_weight: float = 0.05,
+    interaction_weight: float = 0.0,
     max_object_score: float = 1.0,
 ) -> list[dict[str, Any]]:
     fused: list[FusedResult] = []
@@ -101,6 +103,12 @@ def rerank_results_with_objects(
             int(result.get("keyframe_id") or 0),
             max_object_score=max_object_score,
         )
+        interaction_score = score_interactions_for_query(
+            query_text,
+            object_root,
+            str(result.get("video_id", "")),
+            int(result.get("keyframe_id") or 0),
+        )
         clip_score = float(result.get("score", 0.0))
         fused.append(
             FusedResult(
@@ -110,7 +118,8 @@ def rerank_results_with_objects(
                 keyframe_id=int(result.get("keyframe_id") or 0),
                 clip_score=clip_score,
                 object_score=object_score,
-                fused_score=clip_score + (object_weight * object_score),
+                interaction_score=interaction_score,
+                fused_score=clip_score + (object_weight * object_score) + (interaction_weight * interaction_score),
                 matched_rules=matched_rules,
                 matched_entities=matched_entities,
                 keyframe_path=str(result.get("keyframe_path") or ""),
@@ -176,6 +185,54 @@ def load_object_detections(object_root: Path, video_id: str, keyframe_id: int) -
     return [(str(entity), float(score)) for entity, score in zip(entities, scores)]
 
 
+def score_interactions_for_query(query_text: str, object_root: Path, video_id: str, keyframe_id: int) -> float:
+    if "phone" not in query_text.lower() and "mobile" not in query_text.lower():
+        return 0.0
+
+    detections = load_object_detection_items(object_root, video_id, keyframe_id)
+    phones = [item for item in detections if item["entity"] in {"Mobile phone", "Telephone"}]
+    hands = [item for item in detections if item["entity"] in {"Human hand", "Human arm"}]
+    best = 0.0
+    for phone in phones:
+        for hand in hands:
+            distance = _box_center_distance(phone["box"], hand["box"])
+            proximity = 1.0 / (1.0 + (distance * 4.0))
+            score = phone["score"] * hand["score"] * proximity
+            if score > best:
+                best = score
+    return min(best, 1.0)
+
+
+def load_object_detection_items(object_root: Path, video_id: str, keyframe_id: int) -> list[dict[str, Any]]:
+    path = object_root / video_id / f"{keyframe_id:03d}.json"
+    if not path.exists():
+        return []
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entities = payload.get("detection_class_entities", [])
+    scores = payload.get("detection_scores", [])
+    boxes = payload.get("detection_boxes", [])
+    items = []
+    for entity, score, box in zip(entities, scores, boxes):
+        items.append(
+            {
+                "entity": str(entity),
+                "score": float(score),
+                "box": [float(value) for value in box],
+            }
+        )
+    return items
+
+
+def _box_center_distance(box_a: list[float], box_b: list[float]) -> float:
+    ay1, ax1, ay2, ax2 = box_a
+    by1, bx1, by2, bx2 = box_b
+    acx = (ax1 + ax2) / 2.0
+    acy = (ay1 + ay2) / 2.0
+    bcx = (bx1 + bx2) / 2.0
+    bcy = (by1 + by2) / 2.0
+    return ((acx - bcx) ** 2 + (acy - bcy) ** 2) ** 0.5
+
+
 def _with_rank(result: FusedResult, rank: int) -> FusedResult:
     return FusedResult(
         rank=rank,
@@ -184,6 +241,7 @@ def _with_rank(result: FusedResult, rank: int) -> FusedResult:
         keyframe_id=result.keyframe_id,
         clip_score=result.clip_score,
         object_score=result.object_score,
+        interaction_score=result.interaction_score,
         fused_score=result.fused_score,
         matched_rules=result.matched_rules,
         matched_entities=result.matched_entities,
