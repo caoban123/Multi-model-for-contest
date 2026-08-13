@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
+import socket
 import sys
 from pathlib import Path
 
@@ -27,6 +29,10 @@ def main() -> int:
     parser.add_argument("--allow-stale-index", action="store_true")
     args = parser.parse_args()
 
+    if port_is_listening(args.host, args.port):
+        print_port_in_use(args.host, args.port)
+        return 2
+
     groups = {item.strip() for item in args.groups.split(",") if item.strip()}
     config = RetrievalUiConfig(
         repo_root=ROOT,
@@ -39,7 +45,13 @@ def main() -> int:
         clip_local_files_only=args.clip_local_files_only,
         allow_stale_index=args.allow_stale_index,
     )
-    server = run_server(config, host=args.host, port=args.port)
+    try:
+        server = run_server(config, host=args.host, port=args.port)
+    except OSError as exc:
+        if exc.errno in {errno.EADDRINUSE, 10048}:
+            print_port_in_use(args.host, args.port)
+            return 2
+        raise
     url = f"http://{args.host}:{args.port}/"
     print(f"AIC retrieval UI running at {url}")
     print("Press Ctrl+C to stop.")
@@ -50,6 +62,20 @@ def main() -> int:
     finally:
         server.server_close()
     return 0
+
+
+def port_is_listening(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.25)
+        return sock.connect_ex((host, port)) == 0
+
+
+def print_port_in_use(host: str, port: int) -> None:
+    url = f"http://{host}:{port}/"
+    print(f"Port {port} is already in use. The UI may already be running at {url}", file=sys.stderr)
+    print(f"Check health: curl.exe -s http://{host}:{port}/api/health", file=sys.stderr)
+    print(f"Find PID: netstat -ano | Select-String \":{port}\"", file=sys.stderr)
+    print("Stop the existing server with: Stop-Process -Id <PID>", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -177,10 +177,26 @@ python tools\vector_search.py --registry artifacts\registry\data_registry.json -
 Chạy local retrieval UI cho L21:
 
 ```powershell
+$env:AIC_CLIP_MODEL_ID="D:\AIC\.cache\huggingface\hub\models--openai--clip-vit-base-patch32\snapshots\3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
 python tools\retrieval_ui.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --clip-local-files-only
 ```
 
-Mở `http://127.0.0.1:8765/` trong trình duyệt. UI dùng index local đã build, encode text query bằng CLIP, hiển thị thumbnail L21, `video_id`, `keyframe_id`, timestamp, score và metadata. Nếu index cũ báo thiếu provenance, rebuild bằng `tools\build_numpy_index.py`.
+Mở `http://127.0.0.1:8765/` trong trình duyệt. Lệnh server này giữ terminal mở; dừng bằng `Ctrl+C`. Không cần dùng `Start-Process` hoặc redirect log dài dòng trừ khi thật sự muốn chạy nền.
+
+Nếu port `8765` đã được dùng, kiểm tra server đang chạy:
+
+```powershell
+curl.exe -s http://127.0.0.1:8765/api/health
+netstat -ano | Select-String ":8765"
+```
+
+Nếu cần dừng server chạy nền, lấy PID từ `netstat` rồi chạy:
+
+```powershell
+Stop-Process -Id <PID>
+```
+
+UI dùng index local đã build, encode text query bằng CLIP, hiển thị thumbnail L21, `video_id`, `keyframe_id`, timestamp, score và metadata. Nếu index cũ báo thiếu provenance, rebuild bằng `tools\build_numpy_index.py`.
 
 Nếu đã có CLIP cache local, chạy offline/local-only bằng cách đặt biến môi trường:
 
