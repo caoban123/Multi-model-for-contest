@@ -1,0 +1,14 @@
+{
+  "benchmark_version": "1.0-fixture",
+  "dataset_scope": "CI fixture only — not official AIC ground truth and not a production contest benchmark.",
+  "review_status": "TECHNICAL INFERENCE: expected IDs are derived from tests/fixtures/metadata and are safe for deterministic CI only.",
+  "queries": [
+    {"id": "m001", "query": "60 Giây Sáng", "query_type": "title", "expected_video_ids": ["L21_V001"]},
+    {"id": "m002", "query": "bao tuoi tre", "query_type": "author", "expected_video_ids": ["L21_V004"]},
+    {"id": "m003", "query": "HTV Sports", "query_type": "channel", "expected_video_ids": ["L21_V002"]},
+    {"id": "m004", "query": "01082024", "query_type": "date", "expected_video_ids": ["L21_V001"]},
+    {"id": "m005", "query": "thời sự", "query_type": "keyword", "expected_video_ids": ["L21_V001"]},
+    {"id": "m006", "query": "bóng đá", "query_type": "accent_collision", "expected_video_ids": ["L21_V002"]},
+    {"id": "m007", "query": "bong da", "query_type": "ambiguous", "expected_video_ids": ["L21_V002"]}
+  ]
+}

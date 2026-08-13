@@ -1,6 +1,6 @@
 import json
 
-from aic_retrieval.metadata_search import load_metadata_documents, search_metadata, tokenize
+from aic_retrieval.metadata_search import load_metadata_documents, search_metadata, tokenize, tokenize_original
 
 
 def write_media(path, payload):
@@ -10,6 +10,7 @@ def write_media(path, payload):
 def test_tokenize_is_accent_insensitive() -> None:
     assert tokenize("60 Giây Sáng") == ["60", "giay", "sang"]
     assert tokenize("Báo Tuổi Trẻ") == ["bao", "tuoi", "tre"]
+    assert tokenize_original("Bóng đá") == ["bóng", "đá"]
 
 
 def test_metadata_search_ranks_title_and_date(tmp_path) -> None:
@@ -61,3 +62,18 @@ def test_metadata_search_can_require_multiple_matches(tmp_path) -> None:
     results = search_metadata(docs, "tin sang htv", top_k=5, min_match=3)
 
     assert [result.video_id for result in results] == ["L21_V001"]
+
+
+def test_metadata_search_prioritizes_accented_exact_phrase_over_collision(tmp_path) -> None:
+    write_media(tmp_path / "L21_V001.json", {"title": "Bóng đá hôm nay", "author": "HTV Sports"})
+    write_media(tmp_path / "L21_V002.json", {"title": "Bông đá trang trí", "author": "Kênh thủ công"})
+
+    docs = load_metadata_documents(tmp_path)
+
+    accented = search_metadata(docs, "bóng đá", top_k=2)
+    unaccented = search_metadata(docs, "bong da", top_k=2)
+    flower = search_metadata(docs, "bông", top_k=2)
+
+    assert accented[0].video_id == "L21_V001"
+    assert unaccented[0].video_id == "L21_V001"
+    assert flower[0].video_id == "L21_V002"

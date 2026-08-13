@@ -1,0 +1,4 @@
+# Integration profile for the Phase-1 CLIP text-query path.
+-r requirements-test.txt
+torch
+transformers

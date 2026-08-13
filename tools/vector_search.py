@@ -22,6 +22,7 @@ from aic_retrieval.search import (
     load_query_vector,
     load_registry,
     search_numpy_index,
+    validate_numpy_index,
     write_results,
 )
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, encode_clip_text
@@ -39,6 +40,11 @@ def main() -> int:
         "--clip-cache-dir",
         default=os.environ.get("AIC_CLIP_CACHE_DIR"),
         help="Optional HuggingFace cache dir for CLIP model files.",
+    )
+    parser.add_argument(
+        "--allow-stale-index",
+        action="store_true",
+        help="Explicitly allow a persistent index whose registry/source fingerprint cannot be verified. Intended only for debugging.",
     )
     parser.add_argument("--clip-local-files-only", action="store_true", help="Use only local CLIP files; never download.")
     parser.add_argument("--groups", default="L21", help="Comma-separated groups to search, e.g. L21,L22.")
@@ -67,6 +73,16 @@ def main() -> int:
     index_metadata = {}
     if args.index_dir:
         index, refs, index_metadata = load_numpy_index(Path(args.index_dir))
+        validate_numpy_index(
+            index,
+            refs,
+            index_metadata,
+            requested_groups=groups,
+            require_keyframes=args.require_keyframes,
+            registry_path=Path(args.registry),
+            repo_root=ROOT,
+            allow_stale_index=args.allow_stale_index,
+        )
         index_source = args.index_dir
     else:
         registry = load_registry(Path(args.registry))
@@ -127,7 +143,7 @@ def main() -> int:
         "index_ready_ms": index_ready_ms,
         "search_ms": search_ms,
         "elapsed_ms": elapsed_ms,
-        "raw_results": [asdict(result) for result in raw_results[: args.top_k]],
+        "raw_results": [asdict(result) for result in raw_results],
         "results": [asdict(result) for result in diversified_results],
         "video_groups": [asdict(result) for result in video_groups] if args.group_by_video else [],
     }

@@ -2,51 +2,71 @@
   {
     "id": "q001",
     "text": "a person walking outdoors",
-    "notes": "General action query"
+    "notes": "General action query",
+    "query_type": "action",
+    "language": "en"
   },
   {
     "id": "q002",
     "text": "a person riding a motorbike on the street",
-    "notes": "Vehicle and action"
+    "notes": "Vehicle and action",
+    "query_type": "action",
+    "language": "en"
   },
   {
     "id": "q003",
     "text": "people sitting at a table",
-    "notes": "Indoor social scene"
+    "notes": "Indoor social scene",
+    "query_type": "scene",
+    "language": "en"
   },
   {
     "id": "q004",
     "text": "a close up of food on a plate",
-    "notes": "Object-centric food scene"
+    "notes": "Object-centric food scene",
+    "query_type": "object",
+    "language": "en"
   },
   {
     "id": "q005",
     "text": "a crowd of people at an event",
-    "notes": "Crowd scene"
+    "notes": "Crowd scene",
+    "query_type": "scene",
+    "language": "en"
   },
   {
     "id": "q006",
     "text": "a computer screen or television screen",
-    "notes": "Screen object"
+    "notes": "Screen object",
+    "query_type": "object",
+    "language": "en"
   },
   {
     "id": "q007",
     "text": "a car driving on a road",
-    "notes": "Vehicle scene"
+    "notes": "Vehicle scene",
+    "query_type": "action",
+    "language": "en"
   },
   {
     "id": "q008",
     "text": "a person standing in a kitchen",
-    "notes": "Indoor location"
+    "notes": "Indoor location",
+    "query_type": "location",
+    "language": "en"
   },
   {
     "id": "q009",
     "text": "a hand holding a phone",
-    "notes": "Small object interaction"
+    "notes": "Small object interaction",
+    "query_type": "relation",
+    "language": "en"
   },
   {
     "id": "q010",
     "text": "a person wearing a red shirt",
-    "notes": "Attribute query"
+    "notes": "Attribute query",
+    "query_type": "color",
+    "language": "en"
   }
 ]
