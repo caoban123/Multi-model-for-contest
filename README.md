@@ -208,6 +208,15 @@ python tools\audit_metadata.py --media-dir data\media-info --output artifacts\me
 
 Kết quả hiện tại: 873 JSON đọc được, 0 lỗi JSON, 0 marker mojibake, 0 control character. Nếu PowerShell hiển thị chữ Việt bị sai, đó là vấn đề console encoding chứ không phải file metadata hỏng.
 
+Search metadata độc lập, chưa trộn vào CLIP visual search:
+
+```powershell
+python tools\metadata_search.py --media-dir data\media-info --groups L21 --query "60 giay sang 01082024" --top-k 5 --output artifacts\metadata\search_60giay_01082024.json --csv-output artifacts\metadata\search_60giay_01082024.csv
+python tools\metadata_search.py --media-dir data\media-info --query "Bao Tuoi Tre" --top-k 5 --output artifacts\metadata\search_all_bao_tuoi_tre.json --csv-output artifacts\metadata\search_all_bao_tuoi_tre.csv
+```
+
+Metadata search hiện hữu ích cho query theo title, ngày, tác giả, kênh, keywords. Đây vẫn là kênh thử nghiệm riêng; chưa dùng để rerank kết quả hình ảnh mặc định.
+
 Tạo benchmark mở rộng cho các query yếu q008/q009/q010 với raw candidate pool 50:
 
 ```powershell
