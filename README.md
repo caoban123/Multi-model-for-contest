@@ -7,7 +7,7 @@ Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. D�
 Mọi thành viên và AI agent phải đọc theo thứ tự:
 
 1. `.agent/codex.md` - protocol bắt buộc khi làm việc.
-2. `reports/Phase_1_13-08-2026_2.md` - trạng thái mới nhất hiện tại.
+2. `reports/Phase_1_13-08-2026_3.md` - trạng thái mới nhất hiện tại.
 3. `plan/PLAN_AIC2026_VIDEO_RETRIEVAL.md` - kế hoạch tổng thể.
 4. File phase liên quan trong `plan/`, ví dụ `plan/02_PHASE_1_DATA_REGISTRY_BASELINE.md`.
 
