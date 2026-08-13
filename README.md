@@ -7,7 +7,7 @@ Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. D�
 Mọi thành viên và AI agent phải đọc theo thứ tự:
 
 1. `.agent/codex.md` - protocol bắt buộc khi làm việc.
-2. `reports/Phase_1_13-08-2026_3.md` - trạng thái mới nhất hiện tại.
+2. `reports/Phase_2_13-08-2026_1.md` - trạng thái mới nhất hiện tại.
 3. `plan/PLAN_AIC2026_VIDEO_RETRIEVAL.md` - kế hoạch tổng thể.
 4. File phase liên quan trong `plan/`, ví dụ `plan/02_PHASE_1_DATA_REGISTRY_BASELINE.md`.
 
@@ -174,6 +174,14 @@ Search bằng text query CLIP:
 python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-text "a person walking" --groups L21 --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video --output artifacts\registry\sample_search_results_text.json
 ```
 
+Chạy local retrieval UI cho L21:
+
+```powershell
+python tools\retrieval_ui.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --clip-local-files-only
+```
+
+Mở `http://127.0.0.1:8765/` trong trình duyệt. UI dùng index local đã build, encode text query bằng CLIP, hiển thị thumbnail L21, `video_id`, `keyframe_id`, timestamp, score và metadata. Nếu index cũ báo thiếu provenance, rebuild bằng `tools\build_numpy_index.py`.
+
 Nếu đã có CLIP cache local, chạy offline/local-only bằng cách đặt biến môi trường:
 
 ```powershell
@@ -271,4 +279,4 @@ Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 ca
 
 ## Bước Tiếp Theo Đề Xuất
 
-Trước khi chuyển sang Phase 2, mỗi máy cần rebuild registry/index từ data local và chạy `check_phase1_data.py --groups L21`. Metadata fusion, object fusion, FAISS và UI không thuộc baseline đã chốt.
+Phase 2 đã bắt đầu với local retrieval UI cho L21. Bước tiếp theo là thêm pin/judgement/export CSV vào UI để phục vụ review benchmark; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.

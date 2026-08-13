@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AIC Retrieval UI</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="toolbar" aria-label="Search controls">
+        <div class="brand">
+          <h1>AIC L21 Retrieval</h1>
+          <p id="health">Loading index...</p>
+        </div>
+        <form id="search-form" class="search-form">
+          <label class="query-field">
+            <span>Query</span>
+            <input id="query" name="query" type="search" autocomplete="off" placeholder="a person holding a phone" required>
+          </label>
+          <label>
+            <span>Top K</span>
+            <input id="top-k" name="top-k" type="number" min="1" max="50" value="12">
+          </label>
+          <label>
+            <span>Pool</span>
+            <input id="candidate-pool" name="candidate-pool" type="number" min="1" max="200" value="40">
+          </label>
+          <button id="search-button" type="submit">Search</button>
+        </form>
+      </section>
+
+      <section class="status-row" aria-live="polite">
+        <div id="status" class="status">Ready.</div>
+      </section>
+
+      <section id="results" class="results-grid" aria-label="Search results"></section>
+    </main>
+
+    <template id="result-template">
+      <article class="result-card">
+        <div class="thumb-wrap">
+          <img class="thumb" alt="">
+          <div class="missing-thumb">No image</div>
+          <span class="rank"></span>
+        </div>
+        <div class="result-body">
+          <div class="result-head">
+            <strong class="video-id"></strong>
+            <span class="score"></span>
+          </div>
+          <p class="title"></p>
+          <dl class="facts">
+            <div><dt>Keyframe</dt><dd class="keyframe"></dd></div>
+            <div><dt>Time</dt><dd class="time"></dd></div>
+            <div><dt>Author</dt><dd class="author"></dd></div>
+            <div><dt>Date</dt><dd class="date"></dd></div>
+          </dl>
+          <div class="keywords"></div>
+        </div>
+      </article>
+    </template>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
