@@ -2,16 +2,22 @@
   {
     "id": "q008",
     "text": "a person standing in a kitchen",
-    "notes": "Weak location query from first judged benchmark"
+    "notes": "Weak location query from first judged benchmark",
+    "query_type": "location",
+    "language": "en"
   },
   {
     "id": "q009",
     "text": "a hand holding a phone",
-    "notes": "Weak interaction query from first judged benchmark"
+    "notes": "Weak interaction query from first judged benchmark",
+    "query_type": "relation",
+    "language": "en"
   },
   {
     "id": "q010",
     "text": "a person wearing a red shirt",
-    "notes": "Weak attribute query from first judged benchmark"
+    "notes": "Weak attribute query from first judged benchmark",
+    "query_type": "color",
+    "language": "en"
   }
 ]

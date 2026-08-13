@@ -28,7 +28,7 @@ def test_text_query_benchmark_writes_json_and_csv(tmp_path, monkeypatch, capsys)
     queries_path.write_text(json.dumps([{"id": "q001", "text": "red car"}]), encoding="utf-8")
 
     index_dir = tmp_path / "index"
-    index = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    index = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0]], dtype=np.float32)
     refs = [
         FrameRef("V1", "L21", 1, 10, 0.0, 30.0, None),
         FrameRef("V2", "L21", 1, 20, 0.0, 30.0, "data/keyframes/V2/001.jpg"),
@@ -57,6 +57,7 @@ def test_text_query_benchmark_writes_json_and_csv(tmp_path, monkeypatch, capsys)
             str(queries_path),
             "--index-dir",
             str(index_dir),
+            "--allow-stale-index",
             "--clip-model-id",
             "mock-model",
             "--clip-local-files-only",
@@ -66,6 +67,8 @@ def test_text_query_benchmark_writes_json_and_csv(tmp_path, monkeypatch, capsys)
             str(csv_output),
             "--candidate-pool",
             "2",
+            "--top-k",
+            "1",
         ],
     )
 
@@ -111,6 +114,7 @@ def test_text_query_benchmark_can_export_raw_results_to_csv(tmp_path, monkeypatc
             str(queries_path),
             "--index-dir",
             str(index_dir),
+            "--allow-stale-index",
             "--clip-model-id",
             "mock-model",
             "--clip-local-files-only",

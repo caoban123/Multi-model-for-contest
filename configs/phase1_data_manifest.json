@@ -1,0 +1,43 @@
+{
+  "manifest_schema_version": "1.0",
+  "registry_schema_version": "0.1",
+  "source": {
+    "kind": "TEAM DECISION",
+    "notes": "Expected Batch-1 local layout recorded from the Phase-0 audit and Phase-1 reports. Run the preflight command to record observed local values; this manifest must not force a validation result."
+  },
+  "required_directories": [
+    "clip-features-32",
+    "map-keyframes",
+    "media-info",
+    "objects"
+  ],
+  "optional_directories": [
+    "keyframes",
+    "videos"
+  ],
+  "feature_expectation": {
+    "dimension": 512,
+    "dtype": "float16"
+  },
+  "raw_videos": {
+    "required_for_phase1": false,
+    "notes": "Raw videos are outside the Phase-1 baseline scope."
+  },
+  "groups": {
+    "L21": {
+      "expected_videos": 29,
+      "expected_keyframe_images": 7800,
+      "has_keyframe_images": true,
+      "visual_status": "VISUALLY_VERIFIED_SCOPE"
+    },
+    "L22": {"expected_videos": 31, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"},
+    "L23": {"expected_videos": 25, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"},
+    "L24": {"expected_videos": 43, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"},
+    "L25": {"expected_videos": 88, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"},
+    "L26": {"expected_videos": 498, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"},
+    "L27": {"expected_videos": 16, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"},
+    "L28": {"expected_videos": 24, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"},
+    "L29": {"expected_videos": 23, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"},
+    "L30": {"expected_videos": 96, "has_keyframe_images": false, "visual_status": "INDEX_CAPABLE_ONLY"}
+  }
+}

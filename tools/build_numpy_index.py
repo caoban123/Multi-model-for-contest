@@ -11,7 +11,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from aic_retrieval.search import build_numpy_index, load_registry, save_numpy_index
+from aic_retrieval.search import build_index_metadata, build_numpy_index, load_registry, save_numpy_index
 
 
 def main() -> int:
@@ -33,16 +33,16 @@ def main() -> int:
     )
     elapsed_ms = (time.perf_counter() - start) * 1000
 
-    metadata = {
-        "format": "aic_numpy_index",
-        "version": 1,
-        "groups": sorted(groups),
-        "require_keyframes": args.require_keyframes,
-        "vectors": int(index.shape[0]),
-        "dim": int(index.shape[1]),
-        "build_elapsed_ms": elapsed_ms,
-        "registry": args.registry,
-    }
+    metadata = build_index_metadata(
+        registry_path=Path(args.registry),
+        registry=registry,
+        repo_root=ROOT,
+        groups=groups,
+        require_keyframes=args.require_keyframes,
+        index=index,
+        refs=refs,
+        build_elapsed_ms=elapsed_ms,
+    )
     save_numpy_index(Path(args.output_dir), index, refs, metadata)
 
     print(json.dumps({"output_dir": args.output_dir, **metadata}, ensure_ascii=False, indent=2))

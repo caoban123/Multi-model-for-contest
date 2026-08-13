@@ -20,6 +20,19 @@ FIELD_WEIGHTS = {
     "keywords": 2.0,
     "description": 1.0,
 }
+EXACT_TOKEN_BONUS = 0.35
+EXACT_PHRASE_BONUSES = {
+    "title": 3.0,
+    "author": 2.5,
+    "keywords": 2.0,
+    "description": 0.5,
+}
+NORMALIZED_PHRASE_BONUSES = {
+    "title": 0.8,
+    "author": 0.6,
+    "keywords": 0.5,
+    "description": 0.1,
+}
 
 
 @dataclass(frozen=True)
@@ -32,6 +45,9 @@ class MetadataDocument:
     description: str
     watch_url: str
     token_weights: dict[str, float]
+    original_token_weights: dict[str, float]
+    original_fields: dict[str, str]
+    normalized_fields: dict[str, str]
     token_count: float
 
 
@@ -72,11 +88,17 @@ def document_from_payload(video_id: str, payload: dict[str, Any]) -> MetadataDoc
         "description": description,
     }
     token_weights: defaultdict[str, float] = defaultdict(float)
+    original_token_weights: defaultdict[str, float] = defaultdict(float)
+    original_fields = {field: normalize_metadata_text(text).lower() for field, text in fields.items()}
+    normalized_fields = {field: normalize_for_search(text) for field, text in fields.items()}
     for field, text in fields.items():
         weight = FIELD_WEIGHTS[field]
         counts = Counter(tokenize(text))
         for token, count in counts.items():
             token_weights[token] += count * weight
+        original_counts = Counter(tokenize_original(text))
+        for token, count in original_counts.items():
+            original_token_weights[token] += count * weight
     return MetadataDocument(
         video_id=video_id,
         title=fields["title"],
@@ -86,6 +108,9 @@ def document_from_payload(video_id: str, payload: dict[str, Any]) -> MetadataDoc
         description=description,
         watch_url=str(payload.get("watch_url", "") or ""),
         token_weights=dict(token_weights),
+        original_token_weights=dict(original_token_weights),
+        original_fields=original_fields,
+        normalized_fields=normalized_fields,
         token_count=sum(token_weights.values()),
     )
 
@@ -97,15 +122,26 @@ def search_metadata(
     min_match: int = 1,
 ) -> list[MetadataSearchResult]:
     query_terms = tokenize(query)
+    original_query_terms = tokenize_original(query)
     if not query_terms or not docs:
         return []
 
     query_counts = Counter(query_terms)
+    original_query_counts = Counter(original_query_terms)
     doc_freq = compute_doc_freqs(docs)
     avg_len = sum(doc.token_count for doc in docs) / max(len(docs), 1)
     scored = []
     for doc in docs:
-        score, matched = score_document(doc, query_counts, doc_freq, len(docs), avg_len)
+        score, matched = score_document(
+            doc,
+            query_counts,
+            original_query_counts,
+            normalize_metadata_text(query).lower(),
+            normalize_for_search(query),
+            doc_freq,
+            len(docs),
+            avg_len,
+        )
         if score > 0 and len(matched) >= min_match:
             scored.append((score, matched, doc))
 
@@ -130,6 +166,9 @@ def search_metadata(
 def score_document(
     doc: MetadataDocument,
     query_counts: Counter[str],
+    original_query_counts: Counter[str],
+    original_query: str,
+    normalized_query: str,
     doc_freq: dict[str, int],
     doc_count: int,
     avg_len: float,
@@ -146,6 +185,15 @@ def score_document(
         idf = math.log(1 + (doc_count - doc_freq.get(term, 0) + 0.5) / (doc_freq.get(term, 0) + 0.5))
         score += query_tf * idf * ((tf * (k1 + 1)) / (tf + length_norm))
         matched.append(term)
+    for term, query_tf in original_query_counts.items():
+        if term in doc.original_token_weights:
+            score += EXACT_TOKEN_BONUS * query_tf
+    if len(original_query_counts) > 1:
+        for field, bonus in EXACT_PHRASE_BONUSES.items():
+            if original_query and original_query in doc.original_fields.get(field, ""):
+                score += bonus
+            elif normalized_query and normalized_query in doc.normalized_fields.get(field, ""):
+                score += NORMALIZED_PHRASE_BONUSES[field]
     return score, matched
 
 
@@ -161,6 +209,10 @@ def tokenize(text: str) -> list[str]:
     normalized = normalize_for_search(text)
     tokens = TOKEN_RE.findall(normalized)
     return [token for token in tokens if token]
+
+
+def tokenize_original(text: str) -> list[str]:
+    return [token for token in TOKEN_RE.findall(normalize_metadata_text(text).lower()) if token]
 
 
 def normalize_for_search(text: str) -> str:

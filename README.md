@@ -7,7 +7,7 @@ Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. D�
 Mọi thành viên và AI agent phải đọc theo thứ tự:
 
 1. `.agent/codex.md` - protocol bắt buộc khi làm việc.
-2. `reports/Phase_1_12-08-2026_5.md` - trạng thái mới nhất hiện tại.
+2. `reports/Phase_1_13-08-2026_2.md` - trạng thái mới nhất hiện tại.
 3. `plan/PLAN_AIC2026_VIDEO_RETRIEVAL.md` - kế hoạch tổng thể.
 4. File phase liên quan trong `plan/`, ví dụ `plan/02_PHASE_1_DATA_REGISTRY_BASELINE.md`.
 
@@ -15,14 +15,15 @@ Không bắt đầu sửa code chỉ dựa trên README. Report mới nhất là
 
 ## Trạng Thái Hiện Tại
 
-Phase hiện tại: **Phase 1 - Data registry và baseline retrieval**.
+Trạng thái hiện tại: **Phase 1 hoàn thành cho data registry và baseline retrieval**. L21 là scope KIS đã được chạy integration trên máy hiện tại; L22-L30 là scope registry/mapping/metadata/index-capable theo bộ data chuẩn. Các UI, reranking và bài toán mở rộng thuộc phase sau.
 
 Đã có:
 
 - Scanner tạo data registry.
 - Validator kiểm tra CLIP feature, mapping, metadata, object, keyframe.
-- Baseline NumPy cosine search cho L21 bằng query vector `.npy` hoặc text query CLIP.
+- Baseline NumPy cosine search bằng query vector `.npy` hoặc text query CLIP; L21 là scope benchmark KIS hiện tại.
 - Test tối thiểu bằng pytest.
+- Metadata lexical search độc lập ở cấp video, chỉ dùng cho thí nghiệm.
 
 Chưa có:
 
@@ -49,20 +50,41 @@ artifacts/              Output sinh ra, không commit
 
 `data/` không được commit lên GitHub vì dung lượng lớn.
 
-Trạng thái dữ liệu trên máy hiện tại:
+Mỗi thành viên nhận data theo cách riêng; `data/` và `artifacts/` không được commit. Không suy luận coverage của máy này cho máy khác. Với KIS baseline, bắt buộc là CLIP feature và mapping tương ứng; ảnh keyframe chỉ là dữ liệu hỗ trợ để xem cục bộ.
 
-| Nhóm dữ liệu | Coverage |
+Coverage chuẩn đã được ghi nhận trong các report Phase 1 trước đó:
+
+| Nhóm dữ liệu | Coverage chuẩn |
 |---|---|
 | `clip-features-32` | L21-L30, 873 file |
 | `map-keyframes` | L21-L30, 873 file |
 | `media-info` | L21-L30, 873 file |
 | `objects` | L21-L30, 873 folder |
-| `keyframes` | Chỉ L21, 29 folder |
-| `videos` | Chưa có |
+| `keyframes` | Chỉ L21, 29 folder trong bộ đầy đủ đã kiểm tra trước đây |
+| `videos` | Không thuộc yêu cầu Phase 1 |
 
-Keyframes hiện chỉ có L21, nên mọi kiểm tra hình ảnh hoặc viewer chỉ được coi là đúng với L21.
+Các con số trên là coverage tham chiếu của bộ data chuẩn, không phải cam kết rằng mọi máy local đều đã cài đủ toàn bộ data.
+
+## Scope Phase 1
+
+- **L21** là baseline KIS và scope benchmark hiện tại. CLIP feature + mapping là bắt buộc; ảnh keyframe có thể chỉ là một tập cục bộ không đầy đủ.
+- **L22-L30** thuộc scope `registry/mapping/metadata/index-capable` của Phase 1. Chúng không được coi là visual retrieval đã xác minh nếu máy local không có ảnh keyframe tương ứng.
+- Baseline là **CLIP ViT-B/32 + NumPy cosine search**. FAISS là tùy chọn, không phải dependency bắt buộc.
+- Metadata là kênh retrieval độc lập mang tính thử nghiệm. Object fusion cũng là thử nghiệm và bị tắt mặc định vì đã regression trên pool50.
 
 ## Setup Tối Thiểu
+
+### Test-only: không cần dataset hoặc CLIP model
+
+```powershell
+python -m pip install -r requirements-test.txt
+python -m pytest tests -q
+python -m compileall -q src tools tests
+```
+
+Hai test integration dùng dataset sẽ được skip rõ ràng nếu `data/` không tồn tại.
+
+### Phase-1 integration: registry, index và text retrieval
 
 Yêu cầu hiện tại:
 
@@ -71,9 +93,21 @@ Yêu cầu hiện tại:
 - pytest
 - torch, transformers cho text query CLIP
 
+```powershell
+python -m pip install -r requirements-phase1.txt
+```
+
 Không cần cài FAISS hoặc OpenCLIP ở thời điểm này. Text query dùng HuggingFace `openai/clip-vit-base-patch32`; lần chạy đầu trên máy mới có thể cần tải model khoảng 600 MB.
 
 ## Lệnh Hay Dùng
+
+Kiểm tra máy có đủ dữ liệu Phase 1 hay không, không tải hoặc thay đổi dữ liệu:
+
+```powershell
+python tools\check_phase1_data.py --groups L21
+```
+
+`MISSING`/`INVALID` nghĩa là thiếu feature hoặc mapping trong scope đã chọn. `WARNING` cho keyframe image coverage là bình thường khi data được phân phối riêng. Manifest kỳ vọng nằm ở `configs\phase1_data_manifest.json`.
 
 Tạo registry và validation report local:
 
@@ -81,16 +115,7 @@ Tạo registry và validation report local:
 python tools\data_registry.py --data-root data --output artifacts\registry\data_registry.json --validation-output artifacts\registry\validation_report.json
 ```
 
-Kỳ vọng hiện tại:
-
-```text
-total_videos=873
-errors=0
-warnings=844
-keyframe_group_counts={'L21': 29}
-```
-
-844 warning là bình thường vì L22-L30 chưa có keyframe images.
+Registry validation đầy đủ có thể nêu thiếu object hoặc ảnh keyframe cục bộ. Những mục đó không chặn baseline CLIP KIS; preflight L21 sẽ phân biệt lỗi blocking với warning hỗ trợ.
 
 Chạy test:
 
@@ -107,7 +132,7 @@ python -c "from pathlib import Path; import numpy as np; Path('artifacts/query')
 Chạy search mẫu trên L21:
 
 ```powershell
-python tools\vector_search.py --registry artifacts\registry\data_registry.json --query-vector artifacts\query\L21_V001_001.npy --groups L21 --require-keyframes --top-k 5 --output artifacts\registry\sample_search_results.json
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --query-vector artifacts\query\L21_V001_001.npy --groups L21 --top-k 5 --output artifacts\registry\sample_search_results.json
 ```
 
 Kỳ vọng Top-1:
@@ -116,44 +141,44 @@ Kỳ vọng Top-1:
 video_id=L21_V001
 keyframe_id=1
 frame_idx=0
-keyframe_path=data/keyframes/L21_V001/001.jpg
+keyframe_path có thể là null nếu ảnh keyframe tương ứng không nằm trong local data.
 ```
 
 Build persistent NumPy index cho L21:
 
 ```powershell
-python tools\build_numpy_index.py --registry artifacts\registry\data_registry.json --groups L21 --require-keyframes --output-dir artifacts\indexes\l21_numpy
+python tools\build_numpy_index.py --registry artifacts\registry\data_registry.json --groups L21 --output-dir artifacts\indexes\l21_numpy
 ```
 
-Search bằng index đã lưu:
+Search bằng index đã lưu (index mới được fingerprint theo registry, feature và mapping; tool sẽ từ chối index stale hoặc sai scope):
 
 ```powershell
-python tools\vector_search.py --index-dir artifacts\indexes\l21_numpy --query-vector artifacts\query\L21_V001_001.npy --groups L21 --require-keyframes --top-k 5 --output artifacts\registry\sample_search_results_from_index.json
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-vector artifacts\query\L21_V001_001.npy --groups L21 --top-k 5 --output artifacts\registry\sample_search_results_from_index.json
 ```
 
 Search debug trực tiếp bằng video/keyframe, không cần tự tạo query `.npy`:
 
 ```powershell
-python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-from-video-id L21_V001 --query-keyframe-id 1 --groups L21 --require-keyframes --top-k 5 --output artifacts\registry\sample_search_results_from_debug_query.json
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-from-video-id L21_V001 --query-keyframe-id 1 --groups L21 --top-k 5 --output artifacts\registry\sample_search_results_from_debug_query.json
 ```
 
 Search có grouping/diversity theo video:
 
 ```powershell
-python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-from-video-id L21_V001 --query-keyframe-id 1 --groups L21 --require-keyframes --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video --output artifacts\registry\sample_search_results_grouped.json
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-from-video-id L21_V001 --query-keyframe-id 1 --groups L21 --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video --output artifacts\registry\sample_search_results_grouped.json
 ```
 
 Search bằng text query CLIP:
 
 ```powershell
-python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-text "a person walking" --groups L21 --require-keyframes --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video --output artifacts\registry\sample_search_results_text.json
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-text "a person walking" --groups L21 --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video --output artifacts\registry\sample_search_results_text.json
 ```
 
-Máy hiện tại có sẵn snapshot CLIP ở `D:\AIC`. Có thể chạy offline/local-only bằng cách đặt biến môi trường:
+Nếu đã có CLIP cache local, chạy offline/local-only bằng cách đặt biến môi trường:
 
 ```powershell
-$env:AIC_CLIP_MODEL_ID="D:\AIC\.cache\huggingface\hub\models--openai--clip-vit-base-patch32\snapshots\3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
-python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-text "a person walking" --clip-local-files-only --groups L21 --require-keyframes --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video
+$env:AIC_CLIP_CACHE_DIR=(Resolve-Path "artifacts\models")
+python tools\vector_search.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --query-text "a person walking" --clip-local-files-only --groups L21 --candidate-pool 20 --top-k 5 --max-frames-per-video 1 --group-by-video
 ```
 
 Không hard-code đường dẫn `D:\AIC` vào code. Thành viên khác khi pull repo có thể dùng model id mặc định `openai/clip-vit-base-patch32`; nếu chưa có cache local thì HuggingFace sẽ tải model khi chạy text query.
@@ -161,7 +186,7 @@ Không hard-code đường dẫn `D:\AIC` vào code. Thành viên khác khi pull
 Chạy benchmark text query L21:
 
 ```powershell
-python tools\text_query_benchmark.py --queries benchmarks\text_queries_l21.json --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --require-keyframes --candidate-pool 25 --top-k 5 --max-frames-per-video 1 --output artifacts\benchmarks\l21_text_benchmark.json --csv-output artifacts\benchmarks\l21_text_benchmark.csv
+python tools\text_query_benchmark.py --queries benchmarks\text_queries_l21.json --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --candidate-pool 25 --top-k 5 --max-frames-per-video 1 --output artifacts\benchmarks\l21_text_benchmark.json --csv-output artifacts\benchmarks\l21_text_benchmark.csv
 ```
 
 File CSV có cột `manual_judgement` và `manual_notes` để thành viên chấm thủ công Top-K. Nếu dùng snapshot local trên máy hiện tại, đặt `AIC_CLIP_MODEL_ID` như ví dụ phía trên và thêm `--clip-local-files-only`.
@@ -217,10 +242,18 @@ python tools\metadata_search.py --media-dir data\media-info --query "Bao Tuoi Tr
 
 Metadata search hiện hữu ích cho query theo title, ngày, tác giả, kênh, keywords. Đây vẫn là kênh thử nghiệm riêng; chưa dùng để rerank kết quả hình ảnh mặc định.
 
+Chạy metadata benchmark fixture (chỉ kiểm tra kỹ thuật CI, **không phải ground truth hoặc điểm AIC chính thức**):
+
+```powershell
+python tools\benchmark_metadata.py --output artifacts\benchmarks\metadata_fixture_benchmark.json
+```
+
+Khi có `data\media-info` thật, thay `--media-dir` bằng đường dẫn đó và chỉ dùng một query set có expected video IDs đã được nhóm kiểm tra thủ công.
+
 Tạo benchmark mở rộng cho các query yếu q008/q009/q010 với raw candidate pool 50:
 
 ```powershell
-python tools\text_query_benchmark.py --queries benchmarks\text_queries_l21_weak.json --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --require-keyframes --candidate-pool 50 --top-k 5 --max-frames-per-video 1 --csv-result-set raw_results --output artifacts\benchmarks\l21_weak_text_benchmark_pool50.json --csv-output artifacts\benchmarks\l21_weak_text_benchmark_pool50.csv
+python tools\text_query_benchmark.py --queries benchmarks\text_queries_l21_weak.json --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --candidate-pool 50 --top-k 5 --max-frames-per-video 1 --csv-result-set raw_results --output artifacts\benchmarks\l21_weak_text_benchmark_pool50.json --csv-output artifacts\benchmarks\l21_weak_text_benchmark_pool50.csv
 python tools\benchmark_review_html.py --input artifacts\benchmarks\l21_weak_text_benchmark_pool50.json --result-set raw_results --output artifacts\benchmarks\l21_weak_text_review_pool50.html
 ```
 
@@ -238,10 +271,4 @@ Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 ca
 
 ## Bước Tiếp Theo Đề Xuất
 
-Tiếp tục Phase 1 bằng chuẩn bị text query:
-
-1. Chấm thủ công `artifacts\benchmarks\l21_text_benchmark.csv`.
-2. Cải thiện schema/manifest dựa trên lỗi quan sát được.
-3. Sau khi có thêm keyframes, mở search ra ngoài L21.
-
-Chỉ sau đó mới quyết định có cần FAISS hay không.
+Trước khi chuyển sang Phase 2, mỗi máy cần rebuild registry/index từ data local và chạy `check_phase1_data.py --groups L21`. Metadata fusion, object fusion, FAISS và UI không thuộc baseline đã chốt.

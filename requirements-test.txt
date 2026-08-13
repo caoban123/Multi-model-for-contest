@@ -1,0 +1,3 @@
+# Test-only profile.  This profile never needs contest data, a CLIP model, or Internet.
+numpy
+pytest

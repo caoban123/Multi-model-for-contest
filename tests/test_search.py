@@ -3,6 +3,8 @@ import pytest
 
 import tools.vector_search as vector_search
 from aic_retrieval.search import (
+    IndexValidationError,
+    build_index_metadata,
     diversify_results_by_video,
     find_asset,
     group_results_by_video,
@@ -10,6 +12,7 @@ from aic_retrieval.search import (
     normalize_query,
     save_numpy_index,
     search_numpy_index,
+    validate_numpy_index,
 )
 from aic_retrieval.search import FrameRef
 
@@ -131,6 +134,7 @@ def test_vector_search_accepts_text_query(tmp_path, monkeypatch, capsys) -> None
             "--clip-local-files-only",
             "--top-k",
             "1",
+            "--allow-stale-index",
         ],
     )
 
@@ -138,6 +142,85 @@ def test_vector_search_accepts_text_query(tmp_path, monkeypatch, capsys) -> None
     payload = capsys.readouterr().out
     assert '"query_source": "text:a red car"' in payload
     assert '"video_id": "V2"' in payload
+
+
+def test_index_validation_rejects_wrong_group(tmp_path) -> None:
+    index = np.array([[1.0, 0.0]], dtype=np.float32)
+    refs = [FrameRef("V1", "L21", 1, 0, 0.0, 30.0, None)]
+    metadata = {
+        "index_schema_version": "2.0",
+        "groups": ["L21"],
+        "require_keyframes": False,
+        "registry_fingerprint": "unused",
+        "feature_source_fingerprint": "unused",
+        "mapping_source_fingerprint": "unused",
+    }
+
+    with pytest.raises(IndexValidationError, match="index groups"):
+        validate_numpy_index(index, refs, metadata, {"L22"}, False, None, tmp_path, allow_stale_index=True)
+
+
+def test_index_validation_rejects_keyframe_scope_mismatch(tmp_path) -> None:
+    index = np.array([[1.0, 0.0]], dtype=np.float32)
+    refs = [FrameRef("V1", "L21", 1, 0, 0.0, 30.0, None)]
+    metadata = {
+        "index_schema_version": "2.0",
+        "groups": ["L21"],
+        "require_keyframes": True,
+        "registry_fingerprint": "unused",
+        "feature_source_fingerprint": "unused",
+        "mapping_source_fingerprint": "unused",
+    }
+
+    with pytest.raises(IndexValidationError, match="require_keyframes"):
+        validate_numpy_index(index, refs, metadata, {"L21"}, False, None, tmp_path, allow_stale_index=True)
+
+
+def test_index_validation_rejects_stale_registry(tmp_path) -> None:
+    feature_dir = tmp_path / "data" / "clip-features-32"
+    mapping_dir = tmp_path / "data" / "map-keyframes"
+    feature_dir.mkdir(parents=True)
+    mapping_dir.mkdir(parents=True)
+    np.save(feature_dir / "L21_V001.npy", np.array([[1.0, 0.0]], dtype=np.float16))
+    (mapping_dir / "L21_V001.csv").write_text("n,pts_time,fps,frame_idx\n1,0,30,0\n", encoding="utf-8")
+    registry = {
+        "version": "0.1",
+        "videos": [
+            {
+                "video_id": "L21_V001",
+                "group": "L21",
+                "clip_feature_path": "data/clip-features-32/L21_V001.npy",
+                "mapping_path": "data/map-keyframes/L21_V001.csv",
+                "has_keyframe_images": False,
+            }
+        ],
+    }
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(__import__("json").dumps(registry), encoding="utf-8")
+    index = np.array([[1.0, 0.0]], dtype=np.float32)
+    refs = [FrameRef("L21_V001", "L21", 1, 0, 0.0, 30.0, None)]
+    metadata = build_index_metadata(registry_path, registry, tmp_path, {"L21"}, False, index, refs, 1.0)
+    registry_path.write_text(__import__("json").dumps({**registry, "note": "changed"}), encoding="utf-8")
+
+    with pytest.raises(IndexValidationError, match="STALE INDEX"):
+        validate_numpy_index(index, refs, metadata, {"L21"}, False, registry_path, tmp_path)
+
+
+def test_non_l21_result_keeps_mapping_without_image(tmp_path) -> None:
+    feature_dir = tmp_path / "data" / "clip-features-32"
+    mapping_dir = tmp_path / "data" / "map-keyframes"
+    feature_dir.mkdir(parents=True)
+    mapping_dir.mkdir(parents=True)
+    np.save(feature_dir / "L22_V001.npy", np.array([[1.0, 0.0]], dtype=np.float16))
+    (mapping_dir / "L22_V001.csv").write_text("n,pts_time,fps,frame_idx\n7,1.25,25,31\n", encoding="utf-8")
+    registry = {"videos": [{"video_id": "L22_V001", "group": "L22", "clip_feature_path": "data/clip-features-32/L22_V001.npy", "mapping_path": "data/map-keyframes/L22_V001.csv", "keyframe_path": None, "has_keyframe_images": False}]}
+    from aic_retrieval.search import build_numpy_index
+
+    index, refs = build_numpy_index(registry, tmp_path, groups={"L22"})
+    result = search_numpy_index(index, refs, np.array([1.0, 0.0], dtype=np.float32), top_k=1)[0]
+
+    assert (result.video_id, result.keyframe_id, result.frame_idx, result.pts_time) == ("L22_V001", 7, 31, 1.25)
+    assert result.keyframe_path is None
 
 
 def _result(rank: int, video_id: str, keyframe_id: int, score: float):

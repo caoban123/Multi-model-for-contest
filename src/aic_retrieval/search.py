@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import datetime, timezone
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from aic_retrieval.provenance import fingerprint_paths, sha256_file
+
+
+INDEX_SCHEMA_VERSION = "2.0"
+
+
+class IndexValidationError(ValueError):
+    """Raised when a persistent index cannot safely serve the requested search."""
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,8 @@ def build_numpy_index(
 
 
 def save_numpy_index(index_dir: Path, index: np.ndarray, refs: list[FrameRef], metadata: dict[str, Any]) -> None:
+    if len(index) != len(refs):
+        raise ValueError(f"index vector count ({len(index)}) does not match refs count ({len(refs)})")
     index_dir.mkdir(parents=True, exist_ok=True)
     np.save(index_dir / "vectors.npy", index.astype(np.float32, copy=False))
     (index_dir / "refs.json").write_text(
@@ -116,6 +128,90 @@ def load_numpy_index(index_dir: Path) -> tuple[np.ndarray, list[FrameRef], dict[
     if metadata_path.exists():
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     return index, refs, metadata
+
+
+def build_index_metadata(
+    registry_path: Path,
+    registry: dict[str, Any],
+    repo_root: Path,
+    groups: set[str],
+    require_keyframes: bool,
+    index: np.ndarray,
+    refs: list[FrameRef],
+    build_elapsed_ms: float,
+) -> dict[str, Any]:
+    feature_paths, mapping_paths = _source_paths(registry, repo_root, groups, require_keyframes)
+    return {
+        "format": "aic_numpy_index",
+        "index_schema_version": INDEX_SCHEMA_VERSION,
+        "build_timestamp": datetime.now(timezone.utc).isoformat(),
+        "registry_version": registry.get("version"),
+        "registry_path": str(registry_path),
+        "registry_fingerprint": sha256_file(registry_path),
+        "groups": sorted(groups),
+        "require_keyframes": require_keyframes,
+        "vector_count": int(index.shape[0]),
+        "vectors": int(index.shape[0]),
+        "dimension": int(index.shape[1]),
+        "dim": int(index.shape[1]),
+        "dtype": str(index.dtype),
+        "refs_count": len(refs),
+        "feature_source_fingerprint": fingerprint_paths(feature_paths, repo_root),
+        "mapping_source_fingerprint": fingerprint_paths(mapping_paths, repo_root),
+        "model_name": "unknown",
+        "feature_provenance": "BTC-provided CLIP image features; exact extraction provenance is not recorded in the local registry.",
+        "build_elapsed_ms": build_elapsed_ms,
+    }
+
+
+def validate_numpy_index(
+    index: np.ndarray,
+    refs: list[FrameRef],
+    metadata: dict[str, Any],
+    requested_groups: set[str],
+    require_keyframes: bool,
+    registry_path: Path | None,
+    repo_root: Path,
+    allow_stale_index: bool = False,
+) -> None:
+    """Fail closed for scope/provenance mismatches before a persistent index is searched."""
+    if len(index) != len(refs):
+        raise IndexValidationError(f"index has {len(index)} vectors but {len(refs)} refs; rebuild the index")
+    if index.ndim != 2:
+        raise IndexValidationError(f"index vectors must be 2-D, got shape {index.shape}")
+    missing = {"index_schema_version", "groups", "require_keyframes", "registry_fingerprint", "feature_source_fingerprint", "mapping_source_fingerprint"} - set(metadata)
+    if missing and not allow_stale_index:
+        raise IndexValidationError(
+            "index provenance is incomplete (missing " + ", ".join(sorted(missing)) + "). Rebuild it, or pass --allow-stale-index only for an explicit debug run."
+        )
+    indexed_groups = set(metadata.get("groups", []))
+    if indexed_groups and indexed_groups != requested_groups:
+        raise IndexValidationError(
+            f"index groups are {sorted(indexed_groups)}, but the request is {sorted(requested_groups)}. Rebuild/select an index with the same groups."
+        )
+    indexed_keyframes = metadata.get("require_keyframes")
+    if indexed_keyframes is not None and bool(indexed_keyframes) != require_keyframes:
+        raise IndexValidationError(
+            f"index require_keyframes={indexed_keyframes}, but request require_keyframes={require_keyframes}. Rebuild/select a matching index."
+        )
+    if registry_path is None or not registry_path.exists():
+        if allow_stale_index:
+            return
+        raise IndexValidationError(
+            "cannot verify index freshness because the registry is unavailable. Provide --registry or pass --allow-stale-index for an explicit debug run."
+        )
+    registry = load_registry(registry_path)
+    if metadata.get("registry_fingerprint") != sha256_file(registry_path):
+        if not allow_stale_index:
+            raise IndexValidationError("STALE INDEX: registry fingerprint changed. Rebuild the index from the current registry.")
+        return
+    feature_paths, mapping_paths = _source_paths(registry, repo_root, requested_groups, require_keyframes)
+    if metadata.get("feature_source_fingerprint") != fingerprint_paths(feature_paths, repo_root):
+        if not allow_stale_index:
+            raise IndexValidationError("STALE INDEX: CLIP feature source changed. Rebuild the index.")
+    if metadata.get("mapping_source_fingerprint") != fingerprint_paths(mapping_paths, repo_root):
+        if not allow_stale_index:
+            raise IndexValidationError("STALE INDEX: mapping source changed. Rebuild the index.")
 
 
 def search_numpy_index(index: np.ndarray, refs: list[FrameRef], query: np.ndarray, top_k: int) -> list[SearchResult]:
@@ -322,3 +418,28 @@ def _rerank_frame(result: SearchResult, rank: int) -> SearchResult:
         fps=result.fps,
         keyframe_path=result.keyframe_path,
     )
+
+
+def _source_paths(
+    registry: dict[str, Any], repo_root: Path, groups: set[str], require_keyframes: bool
+) -> tuple[list[Path], list[Path]]:
+    feature_paths: list[Path] = []
+    mapping_paths: list[Path] = []
+    for asset in registry.get("videos", []):
+        if asset.get("group") not in groups:
+            continue
+        if require_keyframes and not asset.get("has_keyframe_images"):
+            continue
+        feature_path = _repo_path(repo_root, asset.get("clip_feature_path"))
+        mapping_path = _repo_path(repo_root, asset.get("mapping_path"))
+        if feature_path is None or mapping_path is None:
+            raise IndexValidationError(f"{asset.get('video_id', '<unknown>')} is missing feature or mapping source path")
+        if not feature_path.exists() or not mapping_path.exists():
+            raise IndexValidationError(
+                f"source data for {asset.get('video_id', '<unknown>')} is unavailable. Run tools/check_phase1_data.py or provide the configured data root."
+            )
+        feature_paths.append(feature_path)
+        mapping_paths.append(mapping_path)
+    if not feature_paths:
+        raise IndexValidationError("no feature/mapping sources matched the requested index scope")
+    return feature_paths, mapping_paths

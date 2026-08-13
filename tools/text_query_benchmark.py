@@ -4,9 +4,11 @@ import argparse
 import csv
 import json
 import os
+import platform
 import sys
 import time
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,9 @@ from aic_retrieval.search import (
     load_numpy_index,
     load_registry,
     search_numpy_index,
+    validate_numpy_index,
 )
+from aic_retrieval.provenance import sha256_file
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
 
 
@@ -31,6 +35,7 @@ def main() -> int:
     parser.add_argument("--queries", default="benchmarks/text_queries_l21.json")
     parser.add_argument("--registry", default="artifacts/registry/data_registry.json")
     parser.add_argument("--index-dir", default=None)
+    parser.add_argument("--allow-stale-index", action="store_true", help="Allow an index whose provenance cannot be verified; debug only.")
     parser.add_argument("--groups", default="L21")
     parser.add_argument("--require-keyframes", action="store_true")
     parser.add_argument("--top-k", type=int, default=5)
@@ -58,6 +63,16 @@ def main() -> int:
     index_metadata = {}
     if args.index_dir:
         index, refs, index_metadata = load_numpy_index(Path(args.index_dir))
+        validate_numpy_index(
+            index,
+            refs,
+            index_metadata,
+            requested_groups=groups,
+            require_keyframes=args.require_keyframes,
+            registry_path=Path(args.registry),
+            repo_root=ROOT,
+            allow_stale_index=args.allow_stale_index,
+        )
         index_source = args.index_dir
     else:
         registry = load_registry(Path(args.registry))
@@ -89,6 +104,8 @@ def main() -> int:
             "id": query["id"],
             "text": query["text"],
             "notes": query.get("notes", ""),
+            "query_type": query.get("query_type", "unknown"),
+            "language": query.get("language", "unknown"),
             "search_ms": search_ms,
             "raw_results": [asdict(result) for result in raw_results],
             "results": [asdict(result) for result in results],
@@ -115,6 +132,11 @@ def main() -> int:
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     payload = {
+        "benchmark_version": "2.0",
+        "benchmark_kind": "MANUAL_RELEVANCE_BENCHMARK — not an official AIC score",
+        "query_set_fingerprint": sha256_file(Path(args.queries)),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "machine": {"platform": platform.platform(), "python": platform.python_version()},
         "queries_path": str(Path(args.queries)),
         "query_count": len(queries),
         "groups": sorted(groups),
@@ -132,6 +154,7 @@ def main() -> int:
         "index_ready_ms": index_ready_ms,
         "encode_ms": encode_ms,
         "search_total_ms": search_total_ms,
+        "search_latency_ms": latency_summary([item["search_ms"] for item in query_results]),
         "elapsed_ms": elapsed_ms,
         "queries": query_results,
     }
@@ -180,7 +203,15 @@ def load_queries(path: Path) -> list[dict[str, str]]:
         if query_id in seen_ids:
             raise ValueError(f"duplicate query id: {query_id}")
         seen_ids.add(query_id)
-        queries.append({"id": query_id, "text": text, "notes": str(item.get("notes", "")).strip()})
+        queries.append(
+            {
+                "id": query_id,
+                "text": text,
+                "notes": str(item.get("notes", "")).strip(),
+                "query_type": str(item.get("query_type", "unknown")).strip() or "unknown",
+                "language": str(item.get("language", "unknown")).strip() or "unknown",
+            }
+        )
     return queries
 
 
@@ -208,6 +239,21 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def latency_summary(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "p50": 0.0, "p95": 0.0}
+    ordered = sorted(values)
+    return {
+        "mean": sum(values) / len(values),
+        "p50": percentile(ordered, 0.50),
+        "p95": percentile(ordered, 0.95),
+    }
+
+
+def percentile(values: list[float], fraction: float) -> float:
+    return values[min(len(values) - 1, max(0, round((len(values) - 1) * fraction)))]
 
 
 if __name__ == "__main__":
