@@ -8,6 +8,8 @@ const translateButton = document.querySelector("#translate-button");
 const exportButton = document.querySelector("#export-button");
 const exportPinsButton = document.querySelector("#export-pins-button");
 const clearHistoryButton = document.querySelector("#clear-history-button");
+const visualModeButton = document.querySelector("#visual-mode-button");
+const metadataModeButton = document.querySelector("#metadata-mode-button");
 const statusEl = document.querySelector("#status");
 const healthEl = document.querySelector("#health");
 const resultsEl = document.querySelector("#results");
@@ -16,6 +18,7 @@ const historyListEl = document.querySelector("#history-list");
 const resultTemplate = document.querySelector("#result-template");
 let currentPayload = null;
 let reviewState = new Map();
+let activeMode = "visual";
 const STORAGE_KEYS = {
   history: "aic_retrieval_history_v1",
   pins: "aic_retrieval_pins_v1",
@@ -38,12 +41,15 @@ function setStatus(message, isError = false) {
 }
 
 function secondsLabel(value) {
+  if (value === "" || value === null || value === undefined) {
+    return "-";
+  }
   const seconds = Number(value || 0);
   return `${seconds.toFixed(1)}s`;
 }
 
 function resultKey(result) {
-  return `${result.video_id}:${result.keyframe_id}`;
+  return `${result.video_id}:${result.keyframe_id ?? "metadata"}`;
 }
 
 function loadStoredArray(key) {
@@ -69,7 +75,7 @@ function renderResults(payload) {
     return;
   }
   setStatus(`${payload.results.length} results in ${payload.elapsed_ms.toFixed(1)} ms.`);
-  for (const result of payload.results) {
+  for (const result of payload.results.map((item) => normalizeResult(item, payload.mode))) {
     const node = resultTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.resultKey = resultKey(result);
     node.dataset.result = JSON.stringify(result);
@@ -79,7 +85,7 @@ function renderResults(payload) {
     node.querySelector(".video-id").textContent = result.video_id;
     node.querySelector(".score").textContent = result.score.toFixed(4);
     node.querySelector(".title").textContent = result.metadata.title || "Untitled";
-    node.querySelector(".keyframe").textContent = `${result.keyframe_id}`;
+    node.querySelector(".keyframe").textContent = `${result.keyframe_id ?? "-"}`;
     node.querySelector(".time").textContent = secondsLabel(result.pts_time);
     node.querySelector(".author").textContent = result.metadata.author || "-";
     node.querySelector(".date").textContent = result.metadata.publish_date || "-";
@@ -109,11 +115,38 @@ function renderResults(payload) {
   exportButton.disabled = false;
 }
 
+function normalizeResult(result, mode) {
+  if (mode !== "metadata") {
+    return result;
+  }
+  return {
+    rank: result.rank,
+    score: result.score,
+    video_id: result.video_id,
+    group: result.video_id.split("_")[0],
+    keyframe_id: null,
+    frame_idx: "",
+    pts_time: "",
+    fps: "",
+    keyframe_path: "",
+    image_url: null,
+    matched_terms: result.matched_terms || [],
+    metadata: {
+      title: result.title || "",
+      author: result.author || "",
+      publish_date: result.publish_date || "",
+      watch_url: result.watch_url || "",
+      keywords: result.keywords || [],
+      description_preview: result.description_preview || "",
+    },
+  };
+}
+
 async function runSearch(event) {
   event.preventDefault();
   const originalQuery = queryInput.value.trim();
-  const clipQuery = clipQueryInput.value.trim();
-  const query = clipQuery || originalQuery;
+  const clipQuery = activeMode === "visual" ? clipQueryInput.value.trim() : "";
+  const query = activeMode === "visual" ? clipQuery || originalQuery : originalQuery;
   if (!query) {
     queryInput.focus();
     return;
@@ -125,12 +158,18 @@ async function runSearch(event) {
     max_frames_per_video: "1",
   });
   searchButton.disabled = true;
-  setStatus("Encoding query and searching...");
+  setStatus(activeMode === "metadata" ? "Searching metadata..." : "Encoding query and searching...");
   try {
-    const payload = await fetchJson(`/api/search?${params.toString()}`);
+    const endpoint = activeMode === "metadata" ? "/api/metadata-search" : "/api/search";
+    if (activeMode === "metadata") {
+      params.delete("candidate_pool");
+      params.delete("max_frames_per_video");
+    }
+    const payload = await fetchJson(`${endpoint}?${params.toString()}`);
     payload.original_query = originalQuery;
-    payload.clip_query = query;
-    saveHistoryItem(originalQuery, query);
+    payload.clip_query = activeMode === "visual" ? query : "";
+    payload.mode = payload.mode || activeMode;
+    saveHistoryItem(originalQuery, payload.clip_query, payload.mode);
     renderResults(payload);
     renderHistory();
   } catch (error) {
@@ -140,8 +179,9 @@ async function runSearch(event) {
   }
 }
 
-function saveHistoryItem(originalQuery, clipQuery) {
+function saveHistoryItem(originalQuery, clipQuery, mode) {
   const item = {
+    mode,
     original_query: originalQuery,
     clip_query: clipQuery,
     created_at: new Date().toISOString(),
@@ -149,7 +189,7 @@ function saveHistoryItem(originalQuery, clipQuery) {
   searchHistory = [
     item,
     ...searchHistory.filter(
-      (entry) => entry.original_query !== originalQuery || entry.clip_query !== clipQuery
+      (entry) => entry.mode !== mode || entry.original_query !== originalQuery || entry.clip_query !== clipQuery
     ),
   ].slice(0, 30);
   saveStoredArray(STORAGE_KEYS.history, searchHistory);
@@ -212,7 +252,8 @@ function togglePin(target) {
         key,
         pinned_at: new Date().toISOString(),
         query_text: currentPayload?.original_query || currentPayload?.query || "",
-        clip_query: currentPayload?.clip_query || currentPayload?.query || "",
+        clip_query: currentPayload?.mode === "metadata" ? "" : currentPayload?.clip_query || currentPayload?.query || "",
+        mode: currentPayload?.mode || activeMode,
         result,
       },
       ...pinnedResults,
@@ -241,6 +282,7 @@ function buildCsvRows() {
   const headers = [
     "query_id",
     "query_text",
+    "mode",
     "clip_query",
     "rank",
     "video_id",
@@ -256,12 +298,13 @@ function buildCsvRows() {
     "keyframe_path",
   ];
   const rows = [headers];
-  for (const result of currentPayload.results) {
+  for (const result of currentPayload.results.map((item) => normalizeResult(item, currentPayload.mode))) {
     const state = reviewState.get(resultKey(result)) || {};
     rows.push([
       queryId,
       currentPayload.original_query || currentPayload.query || "",
-      currentPayload.clip_query || currentPayload.query || "",
+      currentPayload.mode || activeMode,
+      currentPayload.mode === "metadata" ? "" : currentPayload.clip_query || currentPayload.query || "",
       result.rank,
       result.video_id,
       result.keyframe_id,
@@ -283,6 +326,7 @@ function buildPinnedCsvRows() {
   const headers = [
     "pinned_at",
     "query_text",
+    "mode",
     "clip_query",
     "video_id",
     "keyframe_id",
@@ -300,6 +344,7 @@ function buildPinnedCsvRows() {
     rows.push([
       item.pinned_at,
       item.query_text,
+      item.mode || "",
       item.clip_query,
       result.video_id,
       result.keyframe_id,
@@ -372,10 +417,10 @@ function renderPins() {
     const node = document.createElement("div");
     node.className = "compact-item";
     const title = document.createElement("strong");
-    title.textContent = `${result.video_id} #${result.keyframe_id}`;
+    title.textContent = `${result.video_id} #${result.keyframe_id ?? "-"}`;
     const meta = document.createElement("div");
     meta.className = "compact-meta";
-    meta.textContent = `${secondsLabel(result.pts_time)} · ${result.metadata?.title || "Untitled"}`;
+    meta.textContent = `${secondsLabel(result.pts_time)} - ${result.metadata?.title || "Untitled"}`;
     const remove = document.createElement("button");
     remove.className = "secondary-button small-button";
     remove.type = "button";
@@ -405,16 +450,30 @@ function renderHistory() {
     button.type = "button";
     button.textContent = item.original_query || item.clip_query;
     button.addEventListener("click", () => {
+      setMode(item.mode || "visual");
       queryInput.value = item.original_query || "";
       clipQueryInput.value = item.clip_query || "";
       form.requestSubmit();
     });
     const meta = document.createElement("div");
     meta.className = "compact-meta";
-    meta.textContent = item.clip_query;
+    meta.textContent = item.clip_query ? `${item.mode || "visual"} - ${item.clip_query}` : item.mode || "visual";
     node.append(button, meta);
     historyListEl.appendChild(node);
   }
+}
+
+function setMode(mode) {
+  activeMode = mode;
+  const isVisual = mode === "visual";
+  visualModeButton.classList.toggle("is-active", isVisual);
+  metadataModeButton.classList.toggle("is-active", !isVisual);
+  visualModeButton.setAttribute("aria-pressed", String(isVisual));
+  metadataModeButton.setAttribute("aria-pressed", String(!isVisual));
+  translateButton.disabled = !isVisual;
+  clipQueryInput.disabled = !isVisual;
+  candidatePoolInput.disabled = !isVisual;
+  setStatus(isVisual ? "Visual search ready." : "Metadata search ready.");
 }
 
 function emptyCompactItem(text) {
@@ -444,7 +503,7 @@ async function loadHealth() {
   try {
     const payload = await fetchJson("/api/health");
     const translation = payload.translation_configured ? "translation on" : "translation off";
-    healthEl.textContent = `${payload.groups.join(", ")} · ${payload.index_vectors} vectors · ${payload.index_dim} dim · ${translation}`;
+    healthEl.textContent = `${payload.groups.join(", ")} - ${payload.index_vectors} vectors - ${payload.index_dim} dim - ${payload.metadata_documents} metadata - ${translation}`;
   } catch (error) {
     healthEl.textContent = error.message;
   }
@@ -455,6 +514,8 @@ translateButton.addEventListener("click", translateQuery);
 exportButton.addEventListener("click", exportCsv);
 exportPinsButton.addEventListener("click", exportPinnedCsv);
 clearHistoryButton.addEventListener("click", clearHistory);
+visualModeButton.addEventListener("click", () => setMode("visual"));
+metadataModeButton.addEventListener("click", () => setMode("metadata"));
 resultsEl.addEventListener("click", (event) => {
   if (event.target.classList.contains("judgement-button")) {
     updateJudgement(event.target);

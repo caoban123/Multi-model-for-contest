@@ -12,6 +12,8 @@ def test_retrieval_ui_contains_review_controls() -> None:
     assert 'id="clear-history-button"' in html
     assert 'id="pins-list"' in html
     assert 'id="history-list"' in html
+    assert 'id="visual-mode-button"' in html
+    assert 'id="metadata-mode-button"' in html
     assert 'class="pin-button secondary-button"' in html
     assert 'data-judgement="good"' in html
     assert 'data-judgement="partial"' in html
@@ -44,3 +46,12 @@ def test_retrieval_ui_uses_local_storage_for_pins_and_history() -> None:
     assert "aic_retrieval_pins_v1" in script
     assert "buildPinnedCsvRows" in script
     assert "Exported ${rows.length - 1} pinned rows." in script
+
+
+def test_retrieval_ui_has_metadata_mode() -> None:
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+
+    assert "/api/metadata-search" in script
+    assert 'activeMode = "visual"' in script
+    assert 'setMode("metadata")' in script
+    assert "normalizeResult" in script

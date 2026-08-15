@@ -50,6 +50,31 @@ body {
   font-size: 13px;
 }
 
+.mode-tabs {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 10px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf7;
+}
+
+.mode-button {
+  height: 32px;
+  min-width: 82px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.mode-button.is-active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 .search-form {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) 104px minmax(220px, 1fr) 92px 92px 104px;

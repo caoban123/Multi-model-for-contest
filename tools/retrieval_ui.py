@@ -29,6 +29,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--registry", type=Path, default=ROOT / "artifacts" / "registry" / "data_registry.json")
     parser.add_argument("--index-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_numpy")
+    parser.add_argument("--metadata-dir", type=Path, default=ROOT / "data" / "media-info")
     parser.add_argument("--groups", default="L21")
     parser.add_argument("--clip-model-id", default=os.environ.get("AIC_CLIP_MODEL_ID", DEFAULT_CLIP_MODEL_ID))
     parser.add_argument("--clip-cache-dir", type=Path, default=Path(os.environ["AIC_CLIP_CACHE_DIR"]) if os.environ.get("AIC_CLIP_CACHE_DIR") else None)
@@ -49,6 +50,7 @@ def main() -> int:
         repo_root=ROOT,
         registry_path=args.registry,
         index_dir=args.index_dir,
+        metadata_dir=args.metadata_dir,
         static_dir=ROOT / "web" / "retrieval_ui",
         groups=groups,
         clip_model_id=args.clip_model_id,

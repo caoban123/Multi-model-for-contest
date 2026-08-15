@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from aic_retrieval.metadata_search import load_metadata_documents
 from aic_retrieval.retrieval_ui import RetrievalUiConfig, RetrievalUiService, parse_int
 
 
@@ -27,6 +28,7 @@ def make_service(tmp_path: Path) -> RetrievalUiService:
         repo_root=tmp_path,
         registry_path=tmp_path / "registry.json",
         index_dir=tmp_path / "index",
+        metadata_dir=tmp_path / "data" / "media-info",
         static_dir=tmp_path / "web",
         groups={"L21"},
     )
@@ -92,3 +94,13 @@ def test_service_translate_uses_configured_translator(tmp_path: Path) -> None:
         "provider": "gemini",
         "model": "fake-model",
     }
+
+
+def test_service_metadata_search_returns_video_results(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    service.metadata_docs = load_metadata_documents(tmp_path / "data" / "media-info", groups={"L21"})
+
+    payload = service.metadata_search("60 giay sang", top_k=5)
+
+    assert payload["total_documents"] == 1
+    assert payload["results"][0]["video_id"] == "L21_V001"

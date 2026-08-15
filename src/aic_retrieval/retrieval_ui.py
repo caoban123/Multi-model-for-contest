@@ -19,6 +19,7 @@ from aic_retrieval.search import (
     search_numpy_index,
     validate_numpy_index,
 )
+from aic_retrieval.metadata_search import load_metadata_documents, results_to_dict, search_metadata
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
 from aic_retrieval.translation import ExternalTranslator, TranslationConfig
 
@@ -28,6 +29,7 @@ class RetrievalUiConfig:
     repo_root: Path
     registry_path: Path
     index_dir: Path
+    metadata_dir: Path
     static_dir: Path
     groups: set[str]
     clip_model_id: str = DEFAULT_CLIP_MODEL_ID
@@ -41,6 +43,7 @@ class RetrievalUiService:
     def __init__(self, config: RetrievalUiConfig) -> None:
         self.config = config
         self.registry = load_registry(config.registry_path)
+        self.metadata_docs = load_metadata_documents(config.metadata_dir, groups=config.groups)
         self.index, self.refs, self.index_metadata = load_numpy_index(config.index_dir)
         validate_numpy_index(
             self.index,
@@ -73,6 +76,7 @@ class RetrievalUiService:
         elapsed_ms = (time.perf_counter() - started) * 1000
 
         return {
+            "mode": "visual",
             "query": query,
             "groups": sorted(self.config.groups),
             "top_k": top_k,
@@ -83,6 +87,26 @@ class RetrievalUiService:
             "index_dim": int(self.index.shape[1]),
             "results": [self.enrich_result(asdict(result)) for result in results],
             "video_groups": [asdict(group) for group in video_groups],
+        }
+
+    def metadata_search(self, query: str, top_k: int = 12, min_match: int = 1) -> dict[str, Any]:
+        query = query.strip()
+        if not query:
+            raise ValueError("metadata query must not be empty")
+        top_k = max(1, min(top_k, 50))
+        min_match = max(1, min(min_match, 10))
+        started = time.perf_counter()
+        results = search_metadata(self.metadata_docs, query, top_k=top_k, min_match=min_match)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        return {
+            "mode": "metadata",
+            "query": query,
+            "groups": sorted(self.config.groups),
+            "top_k": top_k,
+            "min_match": min_match,
+            "elapsed_ms": round(elapsed_ms, 3),
+            "total_documents": len(self.metadata_docs),
+            "results": results_to_dict(results),
         }
 
     def translate(self, text: str) -> dict[str, Any]:
@@ -166,6 +190,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "groups": sorted(service.config.groups),
                         "index_vectors": int(service.index.shape[0]),
                         "index_dim": int(service.index.shape[1]),
+                        "metadata_documents": len(service.metadata_docs),
                         "translation_configured": service.translator.is_configured,
                         "translation_provider": service.translator.config.provider,
                         "translation_model": service.translator.config.model,
@@ -173,6 +198,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 )
             elif parsed.path == "/api/search":
                 self._handle_search(parsed.query)
+            elif parsed.path == "/api/metadata-search":
+                self._handle_metadata_search(parsed.query)
             elif parsed.path == "/api/translate":
                 self._handle_translate(parsed.query)
             elif parsed.path == "/keyframe":
@@ -191,6 +218,19 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     top_k=parse_int(first(params, "top_k", "12"), 12),
                     candidate_pool=parse_int(first(params, "candidate_pool", "30"), 30),
                     max_frames_per_video=parse_int(first(params, "max_frames_per_video", "1"), 1),
+                )
+            except Exception as exc:  # UI boundary: return a readable error to the browser.
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._json(payload)
+
+        def _handle_metadata_search(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                payload = service.metadata_search(
+                    first(params, "q"),
+                    top_k=parse_int(first(params, "top_k", "12"), 12),
+                    min_match=parse_int(first(params, "min_match", "1"), 1),
                 )
             except Exception as exc:  # UI boundary: return a readable error to the browser.
                 self._error(HTTPStatus.BAD_REQUEST, str(exc))

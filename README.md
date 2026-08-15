@@ -215,6 +215,13 @@ CSV export có các cột tương thích với benchmark review như `query_id`,
 
 UI cũng lưu search history và pinned results trong browser `localStorage`. Có thể bấm lại query trong `History`, hoặc xuất riêng danh sách pinned bằng `Export Pins`.
 
+UI có hai chế độ:
+
+- `Visual`: tìm bằng CLIP image features theo keyframe.
+- `Metadata`: tìm theo title, author, publish date, description và keywords trong `data\media-info`.
+
+Metadata search hữu ích cho query như tên chương trình, ngày, kênh hoặc tác giả. Chế độ này tách riêng với visual search; chưa trộn điểm hoặc rerank mặc định.
+
 Nếu đã có CLIP cache local, chạy offline/local-only bằng cách đặt biến môi trường:
 
 ```powershell
@@ -312,4 +319,4 @@ Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 ca
 
 ## Bước Tiếp Theo Đề Xuất
 
-Phase 2 đã có local retrieval UI cho L21, hỗ trợ dịch query bằng Gemini, chấm/export CSV review, pin result và search history. Bước tiếp theo là thêm tab metadata search hoặc keyframe-neighborhood viewer; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.
+Phase 2 đã có local retrieval UI cho L21, hỗ trợ dịch query bằng Gemini, visual search, metadata search, chấm/export CSV review, pin result và search history. Bước tiếp theo là thêm keyframe-neighborhood viewer hoặc chuẩn bị Phase 3 video aggregation/diversity; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.
