@@ -37,6 +37,7 @@
 
       <section class="status-row" aria-live="polite">
         <div id="status" class="status">Ready.</div>
+        <button id="export-button" class="secondary-button" type="button" disabled>Export CSV</button>
       </section>
 
       <section id="results" class="results-grid" aria-label="Search results"></section>
@@ -62,6 +63,17 @@
             <div><dt>Date</dt><dd class="date"></dd></div>
           </dl>
           <div class="keywords"></div>
+          <div class="review-panel">
+            <div class="judgement-buttons" aria-label="Manual judgement">
+              <button class="judgement-button" type="button" data-judgement="good" aria-pressed="false">Good</button>
+              <button class="judgement-button" type="button" data-judgement="partial" aria-pressed="false">Partial</button>
+              <button class="judgement-button" type="button" data-judgement="bad" aria-pressed="false">Bad</button>
+            </div>
+            <label class="note-label">
+              <span>Note</span>
+              <input class="note-input" type="text" placeholder="short review note">
+            </label>
+          </div>
         </div>
       </article>
     </template>

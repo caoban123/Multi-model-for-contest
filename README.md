@@ -203,6 +203,15 @@ Stop-Process -Id <PID>
 
 UI dùng index local đã build, encode text query bằng CLIP, hiển thị thumbnail L21, `video_id`, `keyframe_id`, timestamp, score và metadata. Nếu index cũ báo thiếu provenance, rebuild bằng `tools\build_numpy_index.py`.
 
+Review kết quả ngay trong UI:
+
+1. Chạy query.
+2. Chọn `Good`, `Partial` hoặc `Bad` trên từng result.
+3. Ghi note nếu cần.
+4. Bấm `Export CSV`.
+
+CSV export có các cột tương thích với benchmark review như `query_id`, `query_text`, `clip_query`, `rank`, `video_id`, `keyframe_id`, `score`, `manual_judgement`, `manual_notes`.
+
 Nếu đã có CLIP cache local, chạy offline/local-only bằng cách đặt biến môi trường:
 
 ```powershell
@@ -300,4 +309,4 @@ Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 ca
 
 ## Bước Tiếp Theo Đề Xuất
 
-Phase 2 đã bắt đầu với local retrieval UI cho L21. Bước tiếp theo là thêm pin/judgement/export CSV vào UI để phục vụ review benchmark; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.
+Phase 2 đã có local retrieval UI cho L21, hỗ trợ dịch query bằng Gemini và export CSV review. Bước tiếp theo là thêm pin/search history hoặc tab metadata search; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.

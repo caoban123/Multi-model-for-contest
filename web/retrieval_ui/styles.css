@@ -105,6 +105,10 @@ button:disabled {
 }
 
 .status-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
   padding: 14px 22px 0;
 }
 
@@ -250,6 +254,42 @@ dd {
   white-space: nowrap;
 }
 
+.review-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.judgement-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.judgement-button {
+  height: 34px;
+  border: 1px solid var(--line);
+  background: #f8faf7;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.judgement-button.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.note-label {
+  text-transform: none;
+}
+
+.note-input {
+  height: 36px;
+}
+
 @media (max-width: 820px) {
   .toolbar {
     position: static;
@@ -267,5 +307,10 @@ dd {
 
   button {
     grid-column: 1 / -1;
+  }
+
+  .status-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
