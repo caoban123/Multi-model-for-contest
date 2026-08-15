@@ -126,7 +126,78 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
+  align-content: start;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
   padding: 14px 22px 28px;
+}
+
+.side-panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.panel-section {
+  display: grid;
+  gap: 10px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.small-button {
+  width: auto;
+  min-width: 76px;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.compact-list {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.compact-item strong,
+.compact-item button {
+  overflow-wrap: anywhere;
+}
+
+.compact-item button {
+  height: auto;
+  min-height: 30px;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.compact-meta {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
 }
 
 .result-card {
@@ -262,6 +333,12 @@ dd {
   border-top: 1px solid var(--line);
 }
 
+.pin-button.is-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
 .judgement-buttons {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -312,5 +389,10 @@ dd {
   .status-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    padding: 14px 14px 24px;
   }
 }

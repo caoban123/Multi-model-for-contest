@@ -40,7 +40,25 @@
         <button id="export-button" class="secondary-button" type="button" disabled>Export CSV</button>
       </section>
 
-      <section id="results" class="results-grid" aria-label="Search results"></section>
+      <section class="workspace">
+        <section id="results" class="results-grid" aria-label="Search results"></section>
+        <aside class="side-panel" aria-label="Pinned results and search history">
+          <section class="panel-section">
+            <div class="panel-head">
+              <h2>Pins</h2>
+              <button id="export-pins-button" class="secondary-button small-button" type="button" disabled>Export Pins</button>
+            </div>
+            <div id="pins-list" class="compact-list"></div>
+          </section>
+          <section class="panel-section">
+            <div class="panel-head">
+              <h2>History</h2>
+              <button id="clear-history-button" class="secondary-button small-button" type="button">Clear</button>
+            </div>
+            <div id="history-list" class="compact-list"></div>
+          </section>
+        </aside>
+      </section>
     </main>
 
     <template id="result-template">
@@ -64,6 +82,7 @@
           </dl>
           <div class="keywords"></div>
           <div class="review-panel">
+            <button class="pin-button secondary-button" type="button" aria-pressed="false">Pin</button>
             <div class="judgement-buttons" aria-label="Manual judgement">
               <button class="judgement-button" type="button" data-judgement="good" aria-pressed="false">Good</button>
               <button class="judgement-button" type="button" data-judgement="partial" aria-pressed="false">Partial</button>

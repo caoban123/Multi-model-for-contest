@@ -208,9 +208,12 @@ Review kết quả ngay trong UI:
 1. Chạy query.
 2. Chọn `Good`, `Partial` hoặc `Bad` trên từng result.
 3. Ghi note nếu cần.
-4. Bấm `Export CSV`.
+4. Bấm `Pin` nếu muốn giữ candidate đáng chú ý.
+5. Bấm `Export CSV`.
 
 CSV export có các cột tương thích với benchmark review như `query_id`, `query_text`, `clip_query`, `rank`, `video_id`, `keyframe_id`, `score`, `manual_judgement`, `manual_notes`.
+
+UI cũng lưu search history và pinned results trong browser `localStorage`. Có thể bấm lại query trong `History`, hoặc xuất riêng danh sách pinned bằng `Export Pins`.
 
 Nếu đã có CLIP cache local, chạy offline/local-only bằng cách đặt biến môi trường:
 
@@ -309,4 +312,4 @@ Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 ca
 
 ## Bước Tiếp Theo Đề Xuất
 
-Phase 2 đã có local retrieval UI cho L21, hỗ trợ dịch query bằng Gemini và export CSV review. Bước tiếp theo là thêm pin/search history hoặc tab metadata search; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.
+Phase 2 đã có local retrieval UI cho L21, hỗ trợ dịch query bằng Gemini, chấm/export CSV review, pin result và search history. Bước tiếp theo là thêm tab metadata search hoặc keyframe-neighborhood viewer; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.
