@@ -93,7 +93,7 @@ class RetrievalUiService:
         return {
             "source_text": source_text,
             "translated_text": translated,
-            "provider": "openai-compatible",
+            "provider": self.translator.config.provider,
             "model": self.translator.config.model,
         }
 
@@ -167,6 +167,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "index_vectors": int(service.index.shape[0]),
                         "index_dim": int(service.index.shape[1]),
                         "translation_configured": service.translator.is_configured,
+                        "translation_provider": service.translator.config.provider,
+                        "translation_model": service.translator.config.model,
                     }
                 )
             elif parsed.path == "/api/search":

@@ -8,6 +8,9 @@ from urllib import request
 
 DEFAULT_TRANSLATION_API_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_TRANSLATION_MODEL = "gpt-4o-mini"
+DEFAULT_GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta"
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+SUPPORTED_PROVIDERS = {"gemini", "openai-compatible"}
 
 
 @dataclass(frozen=True)
@@ -15,6 +18,7 @@ class TranslationConfig:
     api_key: str | None = None
     api_url: str = DEFAULT_TRANSLATION_API_URL
     model: str = DEFAULT_TRANSLATION_MODEL
+    provider: str = "openai-compatible"
     timeout_seconds: float = 30.0
 
 
@@ -36,7 +40,15 @@ class ExternalTranslator:
             raise ValueError("translation text must not be empty")
         if not self.is_configured:
             raise TranslationError("translation API is not configured")
+        if self.config.provider not in SUPPORTED_PROVIDERS:
+            raise TranslationError(f"unsupported translation provider: {self.config.provider}")
 
+        if self.config.provider == "gemini":
+            return self._translate_with_gemini(text)
+
+        return self._translate_with_openai_compatible(text)
+
+    def _translate_with_openai_compatible(self, text: str) -> str:
         payload = openai_compatible_payload(text, self.config.model)
         body = json.dumps(payload).encode("utf-8")
         req = request.Request(
@@ -54,6 +66,30 @@ class ExternalTranslator:
         except Exception as exc:
             raise TranslationError(f"translation API request failed: {exc}") from exc
         return parse_openai_compatible_translation(response_payload)
+
+    def _translate_with_gemini(self, text: str) -> str:
+        payload = gemini_payload(text)
+        body = json.dumps(payload).encode("utf-8")
+        base_url = self.config.api_url.rstrip("/")
+        model = self.config.model
+        if not model.startswith("models/"):
+            model = f"models/{model}"
+        url = f"{base_url}/{model}:generateContent"
+        req = request.Request(
+            url,
+            data=body,
+            headers={
+                "x-goog-api-key": self.config.api_key or "",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
+                response_payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            raise TranslationError(f"Gemini translation API request failed: {exc}") from exc
+        return parse_gemini_translation(response_payload)
 
 
 def openai_compatible_payload(text: str, model: str) -> dict[str, Any]:
@@ -73,6 +109,25 @@ def openai_compatible_payload(text: str, model: str) -> dict[str, Any]:
     }
 
 
+def gemini_payload(text: str) -> dict[str, Any]:
+    prompt = (
+        "Translate this Vietnamese video retrieval query into a concise English CLIP search query. "
+        "Keep visual nouns, actions, colors, places, and objects. Return only the English query.\n\n"
+        f"Vietnamese query: {text}"
+    )
+    return {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": prompt}],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0,
+        },
+    }
+
+
 def parse_openai_compatible_translation(payload: dict[str, Any]) -> str:
     try:
         content = payload["choices"][0]["message"]["content"]
@@ -81,4 +136,16 @@ def parse_openai_compatible_translation(payload: dict[str, Any]) -> str:
     translated = str(content).strip().strip('"')
     if not translated:
         raise TranslationError("translation API returned an empty query")
+    return " ".join(translated.split())
+
+
+def parse_gemini_translation(payload: dict[str, Any]) -> str:
+    try:
+        parts = payload["candidates"][0]["content"]["parts"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise TranslationError("Gemini API response does not match generateContent format") from exc
+    text_parts = [str(part.get("text", "")) for part in parts if isinstance(part, dict)]
+    translated = " ".join(text_parts).strip().strip('"')
+    if not translated:
+        raise TranslationError("Gemini API returned an empty query")
     return " ".join(translated.split())

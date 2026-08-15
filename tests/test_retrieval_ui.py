@@ -78,7 +78,7 @@ def test_service_translate_uses_configured_translator(tmp_path: Path) -> None:
     service = make_service(tmp_path)
 
     class FakeTranslator:
-        config = type("Config", (), {"model": "fake-model"})()
+        config = type("Config", (), {"model": "fake-model", "provider": "gemini"})()
 
         def translate_vi_to_en(self, text: str) -> str:
             assert text == "người cầm điện thoại"
@@ -89,6 +89,6 @@ def test_service_translate_uses_configured_translator(tmp_path: Path) -> None:
     assert service.translate(" người cầm điện thoại ") == {
         "source_text": "người cầm điện thoại",
         "translated_text": "a person holding a phone",
-        "provider": "openai-compatible",
+        "provider": "gemini",
         "model": "fake-model",
     }

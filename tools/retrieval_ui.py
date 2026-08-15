@@ -14,7 +14,13 @@ if str(SRC) not in sys.path:
 
 from aic_retrieval.retrieval_ui import RetrievalUiConfig, run_server
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID
-from aic_retrieval.translation import DEFAULT_TRANSLATION_API_URL, DEFAULT_TRANSLATION_MODEL, TranslationConfig
+from aic_retrieval.translation import (
+    DEFAULT_GEMINI_API_URL,
+    DEFAULT_GEMINI_MODEL,
+    DEFAULT_TRANSLATION_API_URL,
+    DEFAULT_TRANSLATION_MODEL,
+    TranslationConfig,
+)
 
 
 def main() -> int:
@@ -27,8 +33,9 @@ def main() -> int:
     parser.add_argument("--clip-model-id", default=os.environ.get("AIC_CLIP_MODEL_ID", DEFAULT_CLIP_MODEL_ID))
     parser.add_argument("--clip-cache-dir", type=Path, default=Path(os.environ["AIC_CLIP_CACHE_DIR"]) if os.environ.get("AIC_CLIP_CACHE_DIR") else None)
     parser.add_argument("--clip-local-files-only", action="store_true")
-    parser.add_argument("--translation-api-url", default=os.environ.get("AIC_TRANSLATION_API_URL", DEFAULT_TRANSLATION_API_URL))
-    parser.add_argument("--translation-model", default=os.environ.get("AIC_TRANSLATION_MODEL", DEFAULT_TRANSLATION_MODEL))
+    parser.add_argument("--translation-provider", choices=["gemini", "openai-compatible"], default=os.environ.get("AIC_TRANSLATION_PROVIDER", "gemini"))
+    parser.add_argument("--translation-api-url", default=os.environ.get("AIC_TRANSLATION_API_URL"))
+    parser.add_argument("--translation-model", default=os.environ.get("AIC_TRANSLATION_MODEL"))
     parser.add_argument("--translation-timeout", type=float, default=float(os.environ.get("AIC_TRANSLATION_TIMEOUT", "30")))
     parser.add_argument("--allow-stale-index", action="store_true")
     args = parser.parse_args()
@@ -50,8 +57,9 @@ def main() -> int:
         allow_stale_index=args.allow_stale_index,
         translation=TranslationConfig(
             api_key=os.environ.get("AIC_TRANSLATION_API_KEY"),
-            api_url=args.translation_api_url,
-            model=args.translation_model,
+            api_url=args.translation_api_url or default_translation_api_url(args.translation_provider),
+            model=args.translation_model or default_translation_model(args.translation_provider),
+            provider=args.translation_provider,
             timeout_seconds=args.translation_timeout,
         ),
     )
@@ -86,6 +94,14 @@ def print_port_in_use(host: str, port: int) -> None:
     print(f"Check health: curl.exe -s http://{host}:{port}/api/health", file=sys.stderr)
     print(f"Find PID: netstat -ano | Select-String \":{port}\"", file=sys.stderr)
     print("Stop the existing server with: Stop-Process -Id <PID>", file=sys.stderr)
+
+
+def default_translation_api_url(provider: str) -> str:
+    return DEFAULT_GEMINI_API_URL if provider == "gemini" else DEFAULT_TRANSLATION_API_URL
+
+
+def default_translation_model(provider: str) -> str:
+    return DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_TRANSLATION_MODEL
 
 
 if __name__ == "__main__":
