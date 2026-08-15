@@ -110,6 +110,9 @@ function renderResults(payload) {
     pinButton.classList.toggle("is-active", isPinned);
     pinButton.setAttribute("aria-pressed", String(isPinned));
     pinButton.textContent = isPinned ? "Pinned" : "Pin";
+    const neighborhoodButton = node.querySelector(".neighborhood-button");
+    const canShowNeighborhood = payload.mode !== "metadata" && result.keyframe_id !== null && result.keyframe_id !== undefined;
+    neighborhoodButton.hidden = !canShowNeighborhood;
     resultsEl.appendChild(node);
   }
   exportButton.disabled = false;
@@ -264,6 +267,81 @@ function togglePin(target) {
   }
   saveStoredArray(STORAGE_KEYS.pins, pinnedResults);
   renderPins();
+}
+
+async function toggleNeighborhood(target) {
+  const card = target.closest(".result-card");
+  const panel = card.querySelector(".neighborhood-panel");
+  if (!panel.hidden) {
+    panel.hidden = true;
+    target.setAttribute("aria-expanded", "false");
+    return;
+  }
+
+  const result = JSON.parse(card.dataset.result);
+  target.disabled = true;
+  panel.hidden = false;
+  panel.replaceChildren();
+  panel.appendChild(emptyNeighborhoodState("Loading nearby keyframes..."));
+  try {
+    const params = new URLSearchParams({
+      video_id: result.video_id,
+      keyframe_id: String(result.keyframe_id),
+      radius: "3",
+    });
+    const payload = await fetchJson(`/api/neighborhood?${params.toString()}`);
+    renderNeighborhood(panel, payload);
+    target.setAttribute("aria-expanded", "true");
+  } catch (error) {
+    panel.replaceChildren();
+    panel.appendChild(emptyNeighborhoodState(error.message));
+  } finally {
+    target.disabled = false;
+  }
+}
+
+function renderNeighborhood(panel, payload) {
+  panel.replaceChildren();
+  const header = document.createElement("div");
+  header.className = "neighborhood-head";
+  header.textContent = `${payload.video_id} · ${payload.start_keyframe_id}-${payload.end_keyframe_id} / ${payload.total_frames}`;
+  const strip = document.createElement("div");
+  strip.className = "neighborhood-strip";
+  for (const frame of payload.frames) {
+    strip.appendChild(neighborhoodFrameNode(frame));
+  }
+  panel.append(header, strip);
+}
+
+function neighborhoodFrameNode(frame) {
+  const node = document.createElement("div");
+  node.className = "neighbor-frame";
+  node.classList.toggle("is-center", Boolean(frame.is_center));
+  const thumb = document.createElement("div");
+  thumb.className = "neighbor-thumb";
+  if (frame.image_url) {
+    const img = document.createElement("img");
+    img.src = frame.image_url;
+    img.alt = `${frame.video_id} keyframe ${frame.keyframe_id}`;
+    img.addEventListener("error", () => {
+      thumb.replaceChildren(emptyNeighborhoodState("No image"));
+    }, { once: true });
+    thumb.appendChild(img);
+  } else {
+    thumb.appendChild(emptyNeighborhoodState("No image"));
+  }
+  const meta = document.createElement("div");
+  meta.className = "neighbor-meta";
+  meta.textContent = `#${frame.keyframe_id} · ${secondsLabel(frame.pts_time)}`;
+  node.append(thumb, meta);
+  return node;
+}
+
+function emptyNeighborhoodState(text) {
+  const node = document.createElement("div");
+  node.className = "neighborhood-empty";
+  node.textContent = text;
+  return node;
 }
 
 function csvEscape(value) {
@@ -522,6 +600,9 @@ resultsEl.addEventListener("click", (event) => {
   }
   if (event.target.classList.contains("pin-button")) {
     togglePin(event.target);
+  }
+  if (event.target.classList.contains("neighborhood-button")) {
+    toggleNeighborhood(event.target);
   }
 });
 resultsEl.addEventListener("input", (event) => {

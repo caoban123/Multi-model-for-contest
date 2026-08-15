@@ -5,6 +5,7 @@ import pytest
 
 from aic_retrieval.metadata_search import load_metadata_documents
 from aic_retrieval.retrieval_ui import RetrievalUiConfig, RetrievalUiService, parse_int
+from aic_retrieval.search import FrameRef
 
 
 def make_service(tmp_path: Path) -> RetrievalUiService:
@@ -33,6 +34,14 @@ def make_service(tmp_path: Path) -> RetrievalUiService:
         groups={"L21"},
     )
     service.assets_by_video = {"L21_V001": {"media_info_path": "data/media-info/L21_V001.json"}}
+    service.refs_by_video = {
+        "L21_V001": [
+            FrameRef("L21_V001", "L21", 1, 0, 0.0, 30.0, "data/keyframes/L21_V001/001.jpg"),
+            FrameRef("L21_V001", "L21", 2, 30, 1.0, 30.0, "data/keyframes/L21_V001/002.jpg"),
+            FrameRef("L21_V001", "L21", 3, 60, 2.0, 30.0, "data/keyframes/L21_V001/003.jpg"),
+            FrameRef("L21_V001", "L21", 4, 90, 3.0, 30.0, "data/keyframes/L21_V001/004.jpg"),
+        ]
+    }
     service.metadata_by_video = {}
     return service
 
@@ -104,3 +113,15 @@ def test_service_metadata_search_returns_video_results(tmp_path: Path) -> None:
 
     assert payload["total_documents"] == 1
     assert payload["results"][0]["video_id"] == "L21_V001"
+
+
+def test_service_keyframe_neighborhood_returns_surrounding_frames(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    payload = service.keyframe_neighborhood("L21_V001", keyframe_id=2, radius=1)
+
+    assert payload["video_id"] == "L21_V001"
+    assert payload["total_frames"] == 4
+    assert [frame["keyframe_id"] for frame in payload["frames"]] == [1, 2, 3]
+    assert [frame["is_center"] for frame in payload["frames"]] == [False, True, False]
+    assert payload["frames"][1]["image_url"] == "/keyframe?path=data/keyframes/L21_V001/002.jpg"

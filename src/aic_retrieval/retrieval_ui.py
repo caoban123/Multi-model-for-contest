@@ -56,6 +56,11 @@ class RetrievalUiService:
             allow_stale_index=config.allow_stale_index,
         )
         self.assets_by_video = {asset["video_id"]: asset for asset in self.registry.get("videos", [])}
+        self.refs_by_video: dict[str, list[Any]] = {}
+        for ref in self.refs:
+            self.refs_by_video.setdefault(ref.video_id, []).append(ref)
+        for video_refs in self.refs_by_video.values():
+            video_refs.sort(key=lambda ref: ref.keyframe_id)
         self.metadata_by_video: dict[str, dict[str, Any]] = {}
         self.encoder: ClipTextEncoder | None = None
         self.translator = ExternalTranslator(config.translation or TranslationConfig())
@@ -107,6 +112,42 @@ class RetrievalUiService:
             "elapsed_ms": round(elapsed_ms, 3),
             "total_documents": len(self.metadata_docs),
             "results": results_to_dict(results),
+        }
+
+    def keyframe_neighborhood(self, video_id: str, keyframe_id: int, radius: int = 3) -> dict[str, Any]:
+        video_id = video_id.strip()
+        if not video_id:
+            raise ValueError("video_id must not be empty")
+        radius = max(1, min(radius, 12))
+        refs = self.refs_by_video.get(video_id)
+        if not refs:
+            raise ValueError(f"video_id not found in index: {video_id}")
+
+        center_index = None
+        for index, ref in enumerate(refs):
+            if ref.keyframe_id == keyframe_id:
+                center_index = index
+                break
+        if center_index is None:
+            raise ValueError(f"{video_id} has no keyframe_id {keyframe_id}")
+
+        start = max(0, center_index - radius)
+        end = min(len(refs), center_index + radius + 1)
+        frames = []
+        for ref in refs[start:end]:
+            item = asdict(ref)
+            item["is_center"] = ref.keyframe_id == keyframe_id
+            item["image_url"] = f"/keyframe?path={ref.keyframe_path}" if ref.keyframe_path else None
+            frames.append(item)
+
+        return {
+            "video_id": video_id,
+            "keyframe_id": keyframe_id,
+            "radius": radius,
+            "total_frames": len(refs),
+            "start_keyframe_id": frames[0]["keyframe_id"] if frames else None,
+            "end_keyframe_id": frames[-1]["keyframe_id"] if frames else None,
+            "frames": frames,
         }
 
     def translate(self, text: str) -> dict[str, Any]:
@@ -200,6 +241,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._handle_search(parsed.query)
             elif parsed.path == "/api/metadata-search":
                 self._handle_metadata_search(parsed.query)
+            elif parsed.path == "/api/neighborhood":
+                self._handle_neighborhood(parsed.query)
             elif parsed.path == "/api/translate":
                 self._handle_translate(parsed.query)
             elif parsed.path == "/keyframe":
@@ -231,6 +274,19 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     first(params, "q"),
                     top_k=parse_int(first(params, "top_k", "12"), 12),
                     min_match=parse_int(first(params, "min_match", "1"), 1),
+                )
+            except Exception as exc:  # UI boundary: return a readable error to the browser.
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._json(payload)
+
+        def _handle_neighborhood(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                payload = service.keyframe_neighborhood(
+                    first(params, "video_id"),
+                    keyframe_id=parse_int(first(params, "keyframe_id", "0"), 0),
+                    radius=parse_int(first(params, "radius", "3"), 3),
                 )
             except Exception as exc:  # UI boundary: return a readable error to the browser.
                 self._error(HTTPStatus.BAD_REQUEST, str(exc))

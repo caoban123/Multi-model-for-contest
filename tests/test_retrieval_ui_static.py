@@ -15,6 +15,8 @@ def test_retrieval_ui_contains_review_controls() -> None:
     assert 'id="visual-mode-button"' in html
     assert 'id="metadata-mode-button"' in html
     assert 'class="pin-button secondary-button"' in html
+    assert 'class="neighborhood-button secondary-button"' in html
+    assert 'class="neighborhood-panel"' in html
     assert 'data-judgement="good"' in html
     assert 'data-judgement="partial"' in html
     assert 'data-judgement="bad"' in html
@@ -55,3 +57,12 @@ def test_retrieval_ui_has_metadata_mode() -> None:
     assert 'activeMode = "visual"' in script
     assert 'setMode("metadata")' in script
     assert "normalizeResult" in script
+
+
+def test_retrieval_ui_has_keyframe_neighborhood_viewer() -> None:
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+
+    assert "/api/neighborhood" in script
+    assert "toggleNeighborhood" in script
+    assert "renderNeighborhood" in script
+    assert "neighborhood-button" in script
