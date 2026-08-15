@@ -1,8 +1,10 @@
 const form = document.querySelector("#search-form");
 const queryInput = document.querySelector("#query");
+const clipQueryInput = document.querySelector("#clip-query");
 const topKInput = document.querySelector("#top-k");
 const candidatePoolInput = document.querySelector("#candidate-pool");
 const searchButton = document.querySelector("#search-button");
+const translateButton = document.querySelector("#translate-button");
 const statusEl = document.querySelector("#status");
 const healthEl = document.querySelector("#health");
 const resultsEl = document.querySelector("#results");
@@ -68,7 +70,9 @@ function renderResults(payload) {
 
 async function runSearch(event) {
   event.preventDefault();
-  const query = queryInput.value.trim();
+  const originalQuery = queryInput.value.trim();
+  const clipQuery = clipQueryInput.value.trim();
+  const query = clipQuery || originalQuery;
   if (!query) {
     queryInput.focus();
     return;
@@ -83,6 +87,8 @@ async function runSearch(event) {
   setStatus("Encoding query and searching...");
   try {
     const payload = await fetchJson(`/api/search?${params.toString()}`);
+    payload.original_query = originalQuery;
+    payload.clip_query = query;
     renderResults(payload);
   } catch (error) {
     setStatus(error.message, true);
@@ -91,14 +97,36 @@ async function runSearch(event) {
   }
 }
 
+async function translateQuery() {
+  const query = queryInput.value.trim();
+  if (!query) {
+    queryInput.focus();
+    return;
+  }
+  translateButton.disabled = true;
+  setStatus("Translating query...");
+  try {
+    const params = new URLSearchParams({ q: query });
+    const payload = await fetchJson(`/api/translate?${params.toString()}`);
+    clipQueryInput.value = payload.translated_text;
+    setStatus(`Translated with ${payload.model}. Review the CLIP query, then search.`);
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    translateButton.disabled = false;
+  }
+}
+
 async function loadHealth() {
   try {
     const payload = await fetchJson("/api/health");
-    healthEl.textContent = `${payload.groups.join(", ")} · ${payload.index_vectors} vectors · ${payload.index_dim} dim`;
+    const translation = payload.translation_configured ? "translation on" : "translation off";
+    healthEl.textContent = `${payload.groups.join(", ")} · ${payload.index_vectors} vectors · ${payload.index_dim} dim · ${translation}`;
   } catch (error) {
     healthEl.textContent = error.message;
   }
 }
 
 form.addEventListener("submit", runSearch);
+translateButton.addEventListener("click", translateQuery);
 loadHealth();

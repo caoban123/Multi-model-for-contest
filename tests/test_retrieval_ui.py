@@ -72,3 +72,23 @@ def test_resolve_keyframe_path_accepts_existing_repo_file(tmp_path: Path) -> Non
 def test_parse_int_falls_back_for_bad_values() -> None:
     assert parse_int("12", 1) == 12
     assert parse_int("bad", 7) == 7
+
+
+def test_service_translate_uses_configured_translator(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    class FakeTranslator:
+        config = type("Config", (), {"model": "fake-model"})()
+
+        def translate_vi_to_en(self, text: str) -> str:
+            assert text == "người cầm điện thoại"
+            return "a person holding a phone"
+
+    service.translator = FakeTranslator()
+
+    assert service.translate(" người cầm điện thoại ") == {
+        "source_text": "người cầm điện thoại",
+        "translated_text": "a person holding a phone",
+        "provider": "openai-compatible",
+        "model": "fake-model",
+    }

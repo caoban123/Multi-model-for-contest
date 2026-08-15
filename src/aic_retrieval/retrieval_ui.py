@@ -20,6 +20,7 @@ from aic_retrieval.search import (
     validate_numpy_index,
 )
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
+from aic_retrieval.translation import ExternalTranslator, TranslationConfig
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class RetrievalUiConfig:
     clip_cache_dir: Path | None = None
     clip_local_files_only: bool = False
     allow_stale_index: bool = False
+    translation: TranslationConfig | None = None
 
 
 class RetrievalUiService:
@@ -53,6 +55,7 @@ class RetrievalUiService:
         self.assets_by_video = {asset["video_id"]: asset for asset in self.registry.get("videos", [])}
         self.metadata_by_video: dict[str, dict[str, Any]] = {}
         self.encoder: ClipTextEncoder | None = None
+        self.translator = ExternalTranslator(config.translation or TranslationConfig())
 
     def search(self, query: str, top_k: int = 12, candidate_pool: int | None = None, max_frames_per_video: int = 1) -> dict[str, Any]:
         query = query.strip()
@@ -80,6 +83,18 @@ class RetrievalUiService:
             "index_dim": int(self.index.shape[1]),
             "results": [self.enrich_result(asdict(result)) for result in results],
             "video_groups": [asdict(group) for group in video_groups],
+        }
+
+    def translate(self, text: str) -> dict[str, Any]:
+        source_text = text.strip()
+        if not source_text:
+            raise ValueError("translation query must not be empty")
+        translated = self.translator.translate_vi_to_en(source_text)
+        return {
+            "source_text": source_text,
+            "translated_text": translated,
+            "provider": "openai-compatible",
+            "model": self.translator.config.model,
         }
 
     def enrich_result(self, result: dict[str, Any]) -> dict[str, Any]:
@@ -151,10 +166,13 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "groups": sorted(service.config.groups),
                         "index_vectors": int(service.index.shape[0]),
                         "index_dim": int(service.index.shape[1]),
+                        "translation_configured": service.translator.is_configured,
                     }
                 )
             elif parsed.path == "/api/search":
                 self._handle_search(parsed.query)
+            elif parsed.path == "/api/translate":
+                self._handle_translate(parsed.query)
             elif parsed.path == "/keyframe":
                 self._serve_keyframe(parsed.query)
             else:
@@ -172,6 +190,15 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     candidate_pool=parse_int(first(params, "candidate_pool", "30"), 30),
                     max_frames_per_video=parse_int(first(params, "max_frames_per_video", "1"), 1),
                 )
+            except Exception as exc:  # UI boundary: return a readable error to the browser.
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._json(payload)
+
+        def _handle_translate(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                payload = service.translate(first(params, "q"))
             except Exception as exc:  # UI boundary: return a readable error to the browser.
                 self._error(HTTPStatus.BAD_REQUEST, str(exc))
                 return

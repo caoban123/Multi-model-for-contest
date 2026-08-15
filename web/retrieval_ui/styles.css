@@ -52,7 +52,7 @@ body {
 
 .search-form {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) 92px 92px 104px;
+  grid-template-columns: minmax(220px, 1fr) 104px minmax(220px, 1fr) 92px 92px 104px;
   gap: 10px;
   align-items: end;
 }
@@ -96,6 +96,12 @@ button {
 button:disabled {
   cursor: wait;
   opacity: 0.65;
+}
+
+.secondary-button {
+  border: 1px solid var(--line);
+  background: #eef3f0;
+  color: var(--ink);
 }
 
 .status-row {
@@ -254,7 +260,8 @@ dd {
     grid-template-columns: 1fr 80px 80px;
   }
 
-  .query-field {
+  .query-field,
+  .clip-query-field {
     grid-column: 1 / -1;
   }
 

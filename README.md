@@ -178,10 +178,15 @@ Chạy local retrieval UI cho L21:
 
 ```powershell
 $env:AIC_CLIP_MODEL_ID="D:\AIC\.cache\huggingface\hub\models--openai--clip-vit-base-patch32\snapshots\3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
+$env:AIC_TRANSLATION_API_KEY="<your-api-key>"
+$env:AIC_TRANSLATION_API_URL="https://api.openai.com/v1/chat/completions"
+$env:AIC_TRANSLATION_MODEL="gpt-4o-mini"
 python tools\retrieval_ui.py --registry artifacts\registry\data_registry.json --index-dir artifacts\indexes\l21_numpy --groups L21 --clip-local-files-only
 ```
 
 Mở `http://127.0.0.1:8765/` trong trình duyệt. Lệnh server này giữ terminal mở; dừng bằng `Ctrl+C`. Không cần dùng `Start-Process` hoặc redirect log dài dòng trừ khi thật sự muốn chạy nền.
+
+Không commit API key. Nếu dùng nhà cung cấp OpenAI-compatible khác, đổi `AIC_TRANSLATION_API_URL` và `AIC_TRANSLATION_MODEL` theo nhà cung cấp đó. Nếu chưa cấu hình `AIC_TRANSLATION_API_KEY`, UI vẫn search bình thường nhưng nút `Translate` sẽ báo chưa cấu hình.
 
 Nếu port `8765` đã được dùng, kiểm tra server đang chạy:
 
