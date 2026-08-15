@@ -1,10 +1,13 @@
 import pytest
+from urllib.error import HTTPError
+from io import BytesIO
 
 from aic_retrieval.translation import (
     DEFAULT_GEMINI_MODEL,
     DEFAULT_TRANSLATION_MODEL,
     TranslationError,
     gemini_payload,
+    http_error_detail,
     openai_compatible_payload,
     parse_gemini_translation,
     parse_openai_compatible_translation,
@@ -49,3 +52,10 @@ def test_parse_gemini_translation_normalizes_text() -> None:
 def test_parse_gemini_translation_rejects_bad_shape() -> None:
     with pytest.raises(TranslationError):
         parse_gemini_translation({"candidates": []})
+
+
+def test_http_error_detail_extracts_api_message() -> None:
+    body = b'{"error":{"status":"INVALID_ARGUMENT","message":"Model is not found"}}'
+    error = HTTPError("https://example.test", 400, "Bad Request", hdrs=None, fp=BytesIO(body))
+
+    assert http_error_detail(error) == "HTTP 400 INVALID_ARGUMENT: Model is not found"

@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from typing import Any
+from urllib.error import HTTPError
 from urllib import request
 
 
 DEFAULT_TRANSLATION_API_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_TRANSLATION_MODEL = "gpt-4o-mini"
 DEFAULT_GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 SUPPORTED_PROVIDERS = {"gemini", "openai-compatible"}
 
 
@@ -63,6 +64,8 @@ class ExternalTranslator:
         try:
             with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
                 response_payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            raise TranslationError(f"translation API request failed: {http_error_detail(exc)}") from exc
         except Exception as exc:
             raise TranslationError(f"translation API request failed: {exc}") from exc
         return parse_openai_compatible_translation(response_payload)
@@ -87,6 +90,8 @@ class ExternalTranslator:
         try:
             with request.urlopen(req, timeout=self.config.timeout_seconds) as response:
                 response_payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            raise TranslationError(f"Gemini translation API request failed: {http_error_detail(exc)}") from exc
         except Exception as exc:
             raise TranslationError(f"Gemini translation API request failed: {exc}") from exc
         return parse_gemini_translation(response_payload)
@@ -149,3 +154,20 @@ def parse_gemini_translation(payload: dict[str, Any]) -> str:
     if not translated:
         raise TranslationError("Gemini API returned an empty query")
     return " ".join(translated.split())
+
+
+def http_error_detail(error: HTTPError) -> str:
+    body = error.read().decode("utf-8", errors="replace")
+    if not body:
+        return f"HTTP {error.code}: {error.reason}"
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return f"HTTP {error.code}: {body[:500]}"
+    message = payload.get("error", {}).get("message")
+    status = payload.get("error", {}).get("status")
+    if message:
+        if status:
+            return f"HTTP {error.code} {status}: {message}"
+        return f"HTTP {error.code}: {message}"
+    return f"HTTP {error.code}: {body[:500]}"
