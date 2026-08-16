@@ -19,6 +19,8 @@ const healthEl = document.querySelector("#health");
 const resultsEl = document.querySelector("#results");
 const pinsListEl = document.querySelector("#pins-list");
 const historyListEl = document.querySelector("#history-list");
+const pinsCountEl = document.querySelector("#pins-count");
+const historyCountEl = document.querySelector("#history-count");
 const resultTemplate = document.querySelector("#result-template");
 let currentPayload = null;
 let reviewState = new Map();
@@ -41,8 +43,35 @@ async function fetchJson(url) {
 }
 
 function setStatus(message, isError = false) {
+  statusEl.replaceChildren();
   statusEl.textContent = message;
   statusEl.classList.toggle("error", isError);
+}
+
+function setStatusPills(items) {
+  statusEl.replaceChildren();
+  statusEl.classList.remove("error");
+  for (const item of items) {
+    const pill = document.createElement("span");
+    pill.className = "status-pill";
+    pill.textContent = item;
+    statusEl.appendChild(pill);
+  }
+}
+
+function renderEmptyResults(title, message) {
+  resultsEl.replaceChildren();
+  resultsEl.classList.add("is-empty");
+  const state = document.createElement("div");
+  state.className = "empty-results";
+  const content = document.createElement("div");
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const detail = document.createElement("p");
+  detail.textContent = message;
+  content.append(heading, detail);
+  state.appendChild(content);
+  resultsEl.appendChild(state);
 }
 
 function secondsLabel(value) {
@@ -91,17 +120,27 @@ function renderResults(payload, resetReview = true) {
     reviewState = new Map();
   }
   resultsEl.replaceChildren();
+  resultsEl.classList.remove("is-empty");
   exportButton.disabled = true;
   const results = displayedResults(payload);
   if (!results.length) {
-    setStatus("No results.");
+    setStatus("No matching results.");
+    renderEmptyResults("No matching results", "Try another query or increase Candidate Pool.");
     return;
   }
-  const resultKind = payload.mode === "metadata" ? "metadata results" : `${activeRankingMode} results`;
-  const timing = payload.mode === "visual"
-    ? `retrieval ${Number(payload.retrieval_ms || 0).toFixed(1)} ms + aggregation ${Number(payload.aggregation_ms || 0).toFixed(1)} ms`
-    : `${Number(payload.elapsed_ms || 0).toFixed(1)} ms`;
-  setStatus(`${results.length} ${resultKind} from ${(payload.raw_results || []).length || results.length} candidates · ${timing}.`);
+  const resultKind = payload.mode === "metadata"
+    ? "metadata results"
+    : activeRankingMode === "video" ? "videos" : "frames";
+  const candidates = (payload.raw_results || []).length || results.length;
+  const statusItems = [`${results.length} ${resultKind}`];
+  if (payload.mode === "visual") {
+    statusItems.push(`Pool ${candidates}`);
+    statusItems.push(`Retrieval ${Number(payload.retrieval_ms || 0).toFixed(1)} ms`);
+    statusItems.push(`Aggregation ${Number(payload.aggregation_ms || 0).toFixed(1)} ms`);
+  } else {
+    statusItems.push(`${Number(payload.elapsed_ms || 0).toFixed(1)} ms`);
+  }
+  setStatusPills(statusItems);
   for (const result of results) {
     const node = resultTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.resultKey = resultKey(result);
@@ -123,6 +162,9 @@ function renderResults(payload, resetReview = true) {
       : "-";
     node.querySelector(".author").textContent = result.metadata.author || "-";
     node.querySelector(".date").textContent = result.metadata.publish_date || "-";
+    node.querySelector(".missing-detail").textContent = result.keyframe_id === null || result.keyframe_id === undefined
+      ? "No keyframe for this result"
+      : `Keyframe ${result.keyframe_id}`;
 
     if (result.image_url) {
       img.src = result.image_url;
@@ -212,6 +254,8 @@ async function runSearch(event) {
     aggregation_method: "max",
   });
   searchButton.disabled = true;
+  const searchButtonLabel = searchButton.innerHTML;
+  searchButton.textContent = activeMode === "metadata" ? "Searching metadata..." : "Searching...";
   setStatus(activeMode === "metadata" ? "Searching metadata..." : "Encoding query and searching...");
   try {
     const endpoint = activeMode === "metadata" ? "/api/metadata-search" : "/api/search";
@@ -232,6 +276,7 @@ async function runSearch(event) {
     setStatus(error.message, true);
   } finally {
     searchButton.disabled = false;
+    searchButton.innerHTML = searchButtonLabel;
   }
 }
 
@@ -258,6 +303,8 @@ async function translateQuery() {
     return;
   }
   translateButton.disabled = true;
+  const translateButtonLabel = translateButton.textContent;
+  translateButton.textContent = "Translating...";
   setStatus("Translating query...");
   try {
     const params = new URLSearchParams({ q: query });
@@ -268,6 +315,7 @@ async function translateQuery() {
     setStatus(error.message, true);
   } finally {
     translateButton.disabled = false;
+    translateButton.textContent = translateButtonLabel;
   }
 }
 
@@ -649,9 +697,10 @@ function exportPinnedCsv() {
 
 function renderPins() {
   pinsListEl.replaceChildren();
+  pinsCountEl.textContent = String(pinnedResults.length);
   exportPinsButton.disabled = pinnedResults.length === 0;
   if (!pinnedResults.length) {
-    pinsListEl.appendChild(emptyCompactItem("No pinned results."));
+    pinsListEl.appendChild(emptyCompactItem("No pinned results yet."));
     return;
   }
   for (const item of pinnedResults) {
@@ -680,8 +729,9 @@ function renderPins() {
 
 function renderHistory() {
   historyListEl.replaceChildren();
+  historyCountEl.textContent = String(searchHistory.length);
   if (!searchHistory.length) {
-    historyListEl.appendChild(emptyCompactItem("No search history."));
+    historyListEl.appendChild(emptyCompactItem("No recent searches yet."));
     return;
   }
   for (const item of searchHistory) {
@@ -712,6 +762,8 @@ function setMode(mode) {
   metadataModeButton.classList.toggle("is-active", !isVisual);
   visualModeButton.setAttribute("aria-pressed", String(isVisual));
   metadataModeButton.setAttribute("aria-pressed", String(!isVisual));
+  visualModeButton.setAttribute("aria-selected", String(isVisual));
+  metadataModeButton.setAttribute("aria-selected", String(!isVisual));
   translateButton.disabled = !isVisual;
   clipQueryInput.disabled = !isVisual;
   candidatePoolInput.disabled = !isVisual;
@@ -729,6 +781,8 @@ function setRankingMode(mode) {
   frameRankingButton.classList.toggle("is-active", !isVideo);
   videoRankingButton.setAttribute("aria-pressed", String(isVideo));
   frameRankingButton.setAttribute("aria-pressed", String(!isVideo));
+  videoRankingButton.setAttribute("aria-selected", String(isVideo));
+  frameRankingButton.setAttribute("aria-selected", String(!isVideo));
   topKLabel.textContent = isVideo ? "Top videos" : "Top frames";
   if (currentPayload?.mode === "visual") {
     renderResults(currentPayload, false);
@@ -764,7 +818,20 @@ async function loadHealth() {
   try {
     const payload = await fetchJson("/api/health");
     const translation = payload.translation_configured ? "translation on" : "translation off";
-    healthEl.textContent = `${payload.groups.join(", ")} - ${payload.index_vectors} vectors - ${payload.index_dim} dim - ${payload.metadata_documents} metadata - ${translation}`;
+    const badges = [
+      { text: payload.groups.join(", "), className: "is-primary" },
+      { text: `${Number(payload.index_vectors).toLocaleString()} keyframes` },
+      { text: `${payload.index_dim} dim` },
+      { text: `${payload.metadata_documents} videos` },
+      { text: translation, className: payload.translation_configured ? "is-success" : "" },
+    ];
+    healthEl.replaceChildren();
+    for (const badge of badges) {
+      const node = document.createElement("span");
+      node.className = `health-badge ${badge.className || ""}`.trim();
+      node.textContent = badge.text;
+      healthEl.appendChild(node);
+    }
   } catch (error) {
     healthEl.textContent = error.message;
   }
@@ -803,4 +870,5 @@ resultsEl.addEventListener("input", (event) => {
 });
 renderPins();
 renderHistory();
+renderEmptyResults("Ready to retrieve", "Enter a query above to explore ranked video moments.");
 loadHealth();

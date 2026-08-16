@@ -8,59 +8,91 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="toolbar" aria-label="Search controls">
+      <header class="top-header">
         <div class="brand">
+          <span class="eyebrow">AIC 2026 · Video Retrieval</span>
           <h1>AIC L21 Retrieval</h1>
-          <p id="health">Loading index...</p>
-          <div class="mode-tabs" aria-label="Search mode">
-            <button id="visual-mode-button" class="mode-button is-active" type="button" aria-pressed="true">Visual</button>
-            <button id="metadata-mode-button" class="mode-button" type="button" aria-pressed="false">Metadata</button>
+          <p class="brand-subtitle">Search and explore relevant moments across video keyframes</p>
+        </div>
+        <div id="health" class="health-badges" aria-live="polite">Loading index...</div>
+      </header>
+
+      <section class="search-panel" aria-labelledby="search-heading">
+        <div class="search-panel-head">
+          <div>
+            <span class="section-kicker">Retrieval workspace</span>
+            <h2 id="search-heading">Search</h2>
           </div>
-          <div id="ranking-tabs" class="mode-tabs ranking-tabs" aria-label="Visual ranking mode">
-            <button id="video-ranking-button" class="mode-button is-active" type="button" aria-pressed="true">Video Ranking</button>
-            <button id="frame-ranking-button" class="mode-button" type="button" aria-pressed="false">Frame Ranking</button>
+          <div class="channel-control">
+            <span class="control-label">Search channel</span>
+            <div class="mode-tabs" role="tablist" aria-label="Search mode">
+              <button id="visual-mode-button" class="mode-button is-active" type="button" role="tab" aria-pressed="true" aria-selected="true">Visual</button>
+              <button id="metadata-mode-button" class="mode-button" type="button" role="tab" aria-pressed="false" aria-selected="false">Metadata</button>
+            </div>
           </div>
         </div>
+
         <form id="search-form" class="search-form">
-          <label class="query-field">
-            <span>Vietnamese query</span>
-            <input id="query" name="query" type="search" autocomplete="off" placeholder="người đang cầm điện thoại" required>
-          </label>
-          <button id="translate-button" class="secondary-button" type="button">Translate</button>
-          <label class="clip-query-field">
-            <span>CLIP query</span>
-            <input id="clip-query" name="clip-query" type="search" autocomplete="off" placeholder="a person holding a phone">
-          </label>
-          <label>
-            <span id="top-k-label">Top videos</span>
-            <input id="top-k" name="top-k" type="number" min="1" max="50" value="12">
-          </label>
-          <label>
-            <span>Frame pool</span>
-            <input id="candidate-pool" name="candidate-pool" type="number" min="1" max="200" value="40">
-          </label>
-          <button id="search-button" type="submit">Search</button>
+          <div class="query-row">
+            <label class="query-field">
+              <span>Vietnamese query</span>
+              <input id="query" name="query" type="search" autocomplete="off" placeholder="người đang cầm điện thoại" required>
+            </label>
+            <button id="translate-button" class="secondary-button translate-button" type="button">Translate</button>
+            <label class="clip-query-field">
+              <span>Translated CLIP query</span>
+              <input id="clip-query" name="clip-query" type="search" autocomplete="off" placeholder="a person holding a phone">
+            </label>
+          </div>
+
+          <div class="config-row">
+            <div class="ranking-control">
+              <span class="control-label">Results mode</span>
+              <div id="ranking-tabs" class="ranking-tabs" role="tablist" aria-label="Visual ranking mode">
+                <button id="video-ranking-button" class="mode-button is-active" type="button" role="tab" aria-pressed="true" aria-selected="true">Video Ranking</button>
+                <button id="frame-ranking-button" class="mode-button" type="button" role="tab" aria-pressed="false" aria-selected="false">Frame Ranking</button>
+              </div>
+            </div>
+            <label class="number-field">
+              <span id="top-k-label">Top videos</span>
+              <input id="top-k" name="top-k" type="number" min="1" max="50" value="12">
+            </label>
+            <label class="number-field">
+              <span>Candidate pool</span>
+              <input id="candidate-pool" name="candidate-pool" type="number" min="1" max="200" value="40">
+            </label>
+            <button id="search-button" class="search-button" type="submit">Search <span aria-hidden="true">→</span></button>
+          </div>
         </form>
       </section>
 
       <section class="status-row" aria-live="polite">
-        <div id="status" class="status">Ready.</div>
+        <div id="status" class="status" role="status">Ready.</div>
         <button id="export-button" class="secondary-button" type="button" disabled>Export CSV</button>
       </section>
 
       <section class="workspace">
-        <section id="results" class="results-grid" aria-label="Search results"></section>
+        <section class="results-area" aria-labelledby="results-heading">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">Ranked candidates</span>
+              <h2 id="results-heading">Results</h2>
+            </div>
+          </div>
+          <section id="results" class="results-grid" aria-label="Search results"></section>
+        </section>
         <aside class="side-panel" aria-label="Pinned results and search history">
+          <span class="section-kicker">Saved workspace</span>
           <section class="panel-section">
             <div class="panel-head">
-              <h2>Pins</h2>
+              <h2>Pins <span id="pins-count" class="count-badge">0</span></h2>
               <button id="export-pins-button" class="secondary-button small-button" type="button" disabled>Export Pins</button>
             </div>
             <div id="pins-list" class="compact-list"></div>
           </section>
           <section class="panel-section">
             <div class="panel-head">
-              <h2>History</h2>
+              <h2>History <span id="history-count" class="count-badge">0</span></h2>
               <button id="clear-history-button" class="secondary-button small-button" type="button">Clear</button>
             </div>
             <div id="history-list" class="compact-list"></div>
@@ -73,7 +105,13 @@
       <article class="result-card">
         <div class="thumb-wrap">
           <img class="thumb" alt="">
-          <div class="missing-thumb">No image</div>
+          <div class="missing-thumb">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 5.5h16v13H4zM7 15l3.2-3.2 2.4 2.4 1.7-1.7L18 16M8.5 9.5h.01"></path>
+            </svg>
+            <strong>Preview unavailable</strong>
+            <span class="missing-detail">Keyframe image not found</span>
+          </div>
           <span class="rank"></span>
         </div>
         <div class="result-body">
@@ -83,18 +121,20 @@
           </div>
           <p class="title"></p>
           <dl class="facts">
-            <div><dt class="keyframe-label">Keyframe</dt><dd class="keyframe"></dd></div>
-            <div><dt>Time</dt><dd class="time"></dd></div>
+            <div><dt class="keyframe-label">Keyframe</dt><dd>Frame <span class="keyframe"></span></dd></div>
+            <div><dt>Timestamp</dt><dd class="time"></dd></div>
             <div class="matched-fact"><dt>Matched in pool</dt><dd class="matched-count"></dd></div>
             <div><dt>Author</dt><dd class="author"></dd></div>
             <div><dt>Date</dt><dd class="date"></dd></div>
           </dl>
           <div class="keywords"></div>
           <div class="review-panel">
-            <button class="pin-button secondary-button" type="button" aria-pressed="false">Pin</button>
-            <button class="explore-button secondary-button" type="button" aria-expanded="false">Explore video</button>
+            <div class="card-actions">
+              <button class="pin-button secondary-button" type="button" aria-pressed="false">Pin</button>
+              <button class="explore-button secondary-button" type="button" aria-expanded="false">Explore video</button>
+              <button class="neighborhood-button secondary-button" type="button" aria-expanded="false">Neighbors</button>
+            </div>
             <div class="explore-panel" hidden></div>
-            <button class="neighborhood-button secondary-button" type="button" aria-expanded="false">Neighbors</button>
             <div class="neighborhood-panel" hidden></div>
             <div class="judgement-buttons" aria-label="Manual judgement">
               <button class="judgement-button" type="button" data-judgement="good" aria-pressed="false">Good</button>
