@@ -1,0 +1,282 @@
+{
+  "query_set_version": "phase4-final-eval-v1.0",
+  "description": "Manual relevance review query set for Phase 4 final evaluation. Empty expected_video_ids means relevance has not been judged yet.",
+  "queries": [
+    {
+      "query_id": "p4fe-gs-dev-01",
+      "query_text_vi": "một người đang đi bộ ngoài trời",
+      "query_text_en": "a person walking outdoors",
+      "query_type": "general_semantic",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {}
+    },
+    {
+      "query_id": "p4fe-gs-dev-02",
+      "query_text_vi": "nhiều người trong một sự kiện đông đúc",
+      "query_text_en": "a crowd of people at an event",
+      "query_type": "general_semantic",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {}
+    },
+    {
+      "query_id": "p4fe-gs-hold-01",
+      "query_text_vi": "người đang ngồi trong phòng",
+      "query_text_en": "people sitting indoors",
+      "query_type": "general_semantic",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {}
+    },
+    {
+      "query_id": "p4fe-os-dev-01",
+      "query_text_vi": "một chiếc điện thoại di động",
+      "query_text_en": "a mobile phone",
+      "query_type": "object_specific",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"objects": [{"label": "phone", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-os-dev-02",
+      "query_text_vi": "một màn hình máy tính hoặc ti vi",
+      "query_text_en": "a computer monitor or television screen",
+      "query_type": "object_specific",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"objects": [{"label": "screen", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-os-hold-01",
+      "query_text_vi": "một chiếc xe máy trên đường",
+      "query_text_en": "a motorbike on the street",
+      "query_type": "object_specific",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"objects": [{"label": "motorbike", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-oc-dev-01",
+      "query_text_vi": "ít nhất hai người trong khung hình",
+      "query_text_en": "at least two people in the frame",
+      "query_type": "object_count",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"objects": [{"label": "person", "min_count": 2, "mode": "hard"}]}
+    },
+    {
+      "query_id": "p4fe-oc-hold-01",
+      "query_text_vi": "ít nhất ba phương tiện giao thông",
+      "query_text_en": "at least three vehicles",
+      "query_type": "object_count",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"objects": [{"label": "vehicle", "min_count": 3, "mode": "hard"}]}
+    },
+    {
+      "query_id": "p4fe-op-dev-01",
+      "query_text_vi": "một người ở bên trái khung hình",
+      "query_text_en": "a person on the left side of the frame",
+      "query_type": "object_position",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"objects": [{"label": "person", "position": "left", "mode": "hard"}]}
+    },
+    {
+      "query_id": "p4fe-op-hold-01",
+      "query_text_vi": "một chiếc xe ở giữa khung hình",
+      "query_text_en": "a vehicle in the center of the frame",
+      "query_type": "object_position",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"objects": [{"label": "vehicle", "position": "center", "mode": "hard"}]}
+    },
+    {
+      "query_id": "p4fe-in-dev-01",
+      "query_text_vi": "một người đang cầm điện thoại",
+      "query_text_en": "a person holding a phone",
+      "query_type": "interaction",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"interaction": {"subject": "person", "relation": "near_or_holding", "object": "phone", "mode": "soft"}}
+    },
+    {
+      "query_id": "p4fe-in-dev-02",
+      "query_text_vi": "một người đang đi xe máy",
+      "query_text_en": "a person riding a motorbike",
+      "query_type": "interaction",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"interaction": {"subject": "person", "relation": "overlap_or_near", "object": "motorbike", "mode": "soft"}}
+    },
+    {
+      "query_id": "p4fe-in-hold-01",
+      "query_text_vi": "bàn tay đang cầm một vật nhỏ",
+      "query_text_en": "a hand holding a small object",
+      "query_type": "interaction",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {}
+    },
+    {
+      "query_id": "p4fe-ti-dev-01",
+      "query_text_vi": "tiêu đề có 60 Giây Sáng",
+      "query_text_en": "title contains 60 Giay Sang",
+      "query_type": "title",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"metadata": {"title": "60 Giây Sáng", "mode": "hard"}}
+    },
+    {
+      "query_id": "p4fe-ti-hold-01",
+      "query_text_vi": "tiêu đề có tin tức mới nhất",
+      "query_text_en": "title contains latest news",
+      "query_type": "title",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"metadata": {"title": "Tin Tức Mới Nhất", "mode": "hard"}}
+    },
+    {
+      "query_id": "p4fe-ch-dev-01",
+      "query_text_vi": "video từ kênh 60 Giây Official",
+      "query_text_en": "video from the 60 Giay Official channel",
+      "query_type": "channel",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"metadata": {"channel": "60 Giây Official", "mode": "hard"}}
+    },
+    {
+      "query_id": "p4fe-ch-hold-01",
+      "query_text_vi": "video từ kênh HTV Tin Tức",
+      "query_text_en": "video from the HTV News channel",
+      "query_type": "channel",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"metadata": {"channel": "HTV Tin Tức", "mode": "hard"}}
+    },
+    {
+      "query_id": "p4fe-da-dev-01",
+      "query_text_vi": "video xuất bản ngày 21 tháng 8 năm 2024",
+      "query_text_en": "video published on August 21 2024",
+      "query_type": "date",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"metadata": {"date_from": "2024-08-21", "date_to": "2024-08-21", "mode": "hard"}}
+    },
+    {
+      "query_id": "p4fe-da-hold-01",
+      "query_text_vi": "video xuất bản trong nửa đầu tháng 8 năm 2024",
+      "query_text_en": "video published in the first half of August 2024",
+      "query_type": "date",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"metadata": {"date_from": "2024-08-01", "date_to": "2024-08-15", "mode": "hard"}}
+    },
+    {
+      "query_id": "p4fe-mc-dev-01",
+      "query_text_vi": "bản tin buổi sáng về giao thông",
+      "query_text_en": "morning news about traffic",
+      "query_type": "metadata_context",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"metadata": {"keywords": ["giao thông"], "mode": "soft"}}
+    },
+    {
+      "query_id": "p4fe-mc-hold-01",
+      "query_text_vi": "bản tin có nội dung về thời tiết",
+      "query_text_en": "news report about weather",
+      "query_type": "metadata_context",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"metadata": {"keywords": ["thời tiết"], "mode": "soft"}}
+    },
+    {
+      "query_id": "p4fe-ac-dev-01",
+      "query_text_vi": "một người mặc áo màu đỏ",
+      "query_text_en": "a person wearing a red shirt",
+      "query_type": "attribute_color",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"attributes": [{"color": "red", "target": "clothing", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-ac-dev-02",
+      "query_text_vi": "một người mặc áo màu trắng",
+      "query_text_en": "a person wearing a white shirt",
+      "query_type": "attribute_color",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"attributes": [{"color": "white", "target": "clothing", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-ac-dev-03",
+      "query_text_vi": "một người mặc quần áo màu đen",
+      "query_text_en": "a person wearing black clothes",
+      "query_type": "attribute_color",
+      "split": "development",
+      "expected_video_ids": [],
+      "structured_constraints": {"attributes": [{"color": "black", "target": "clothing", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-ac-hold-06",
+      "query_text_vi": "một chiếc xe màu trắng",
+      "query_text_en": "a white vehicle",
+      "query_type": "attribute_color",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {
+        "objects": [{"label": "vehicle", "mode": "soft"}],
+        "attributes": [{"color": "white", "target": "any", "mode": "soft"}]
+      }
+    },
+    {
+      "query_id": "p4fe-ac-hold-01",
+      "query_text_vi": "một người mặc áo màu xanh dương",
+      "query_text_en": "a person wearing a blue shirt",
+      "query_type": "attribute_color",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"attributes": [{"color": "blue", "target": "clothing", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-ac-hold-02",
+      "query_text_vi": "một người mặc áo màu vàng",
+      "query_text_en": "a person wearing a yellow shirt",
+      "query_type": "attribute_color",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"attributes": [{"color": "yellow", "target": "clothing", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-ac-hold-03",
+      "query_text_vi": "một người mặc áo màu hồng",
+      "query_text_en": "a person wearing a pink shirt",
+      "query_type": "attribute_color",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"attributes": [{"color": "pink", "target": "clothing", "mode": "soft"}]}
+    },
+    {
+      "query_id": "p4fe-ac-hold-04",
+      "query_text_vi": "một chiếc xe màu đỏ",
+      "query_text_en": "a red vehicle",
+      "query_type": "attribute_color",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {
+        "objects": [{"label": "vehicle", "mode": "soft"}],
+        "attributes": [{"color": "red", "target": "any", "mode": "soft"}]
+      }
+    },
+    {
+      "query_id": "p4fe-ac-hold-05",
+      "query_text_vi": "một người mặc áo màu xanh lá",
+      "query_text_en": "a person wearing a green shirt",
+      "query_type": "attribute_color",
+      "split": "holdout",
+      "expected_video_ids": [],
+      "structured_constraints": {"attributes": [{"color": "green", "target": "clothing", "mode": "soft"}]}
+    }
+  ]
+}

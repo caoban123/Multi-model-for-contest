@@ -409,4 +409,6 @@ python tools\phase4_benchmark.py --clip-cache-dir artifacts\models --clip-local-
 
 Output được tạo dưới `artifacts/benchmarks/phase4/` và không commit. `ablation_v1_review.csv` có cột chấm tay và evidence CLIP/object/metadata/RRF; UI export mới có thêm attribute fields khi bật Attributes. Khi chưa có manual ground truth, Recall/MRR/NDCG được ghi `null/unavailable`; không được diễn giải là 0.
 
+Final evaluation query set cho manual review nằm ở `benchmarks/phase4_final_eval_queries_v1.json`: 30 query, chia 15 development / 15 holdout, có nhóm attribute-color để kiểm tra các query như `person wearing a red shirt`. Chỉ dùng development để tuning; holdout chỉ dùng sau khi đã chốt cấu hình.
+
 Quyết định P4.10: **HYBRID OPT-IN**. Implementation, API, UI và ablation pipeline đã hoàn thành; quality verification/default promotion vẫn chờ manual judgement. Không đổi framework, model, vector database, OCR/ASR hoặc detector.
