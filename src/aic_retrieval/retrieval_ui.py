@@ -20,6 +20,12 @@ from aic_retrieval.search import (
     validate_numpy_index,
 )
 from aic_retrieval.metadata_search import load_metadata_documents, results_to_dict, search_metadata
+from aic_retrieval.metadata_search import MetadataConstraints
+from aic_retrieval.hybrid_candidates import StructuredCandidateGenerator
+from aic_retrieval.hybrid_ranking import RrfConfig, rank_video_candidates
+from aic_retrieval.object_search import ObjectSearchService
+from aic_retrieval.object_store import load_alias_dictionary
+from aic_retrieval.structured_query import ObjectConstraint, StructuredQuery
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
 from aic_retrieval.translation import ExternalTranslator, TranslationConfig
 
@@ -46,6 +52,8 @@ class RetrievalUiConfig:
     clip_local_files_only: bool = False
     allow_stale_index: bool = False
     translation: TranslationConfig | None = None
+    object_store_path: Path | None = None
+    object_aliases_path: Path | None = None
 
 
 class RetrievalUiService:
@@ -73,6 +81,11 @@ class RetrievalUiService:
         self.metadata_by_video: dict[str, dict[str, Any]] = {}
         self.encoder: ClipTextEncoder | None = None
         self.translator = ExternalTranslator(config.translation or TranslationConfig())
+        self.object_service: ObjectSearchService | None = None
+        if config.object_store_path is not None and config.object_store_path.is_file():
+            aliases_path = config.object_aliases_path or config.repo_root / "config" / "object_aliases_v1.json"
+            self.object_service = ObjectSearchService(config.object_store_path, load_alias_dictionary(aliases_path))
+        self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs)
 
     def search(
         self,
@@ -158,6 +171,100 @@ class RetrievalUiService:
             "elapsed_ms": round(elapsed_ms, 3),
             "total_documents": len(self.metadata_docs),
             "results": results_to_dict(results),
+        }
+
+    def structured_search(
+        self,
+        query: str,
+        top_k: int = DEFAULT_TOP_K_VIDEOS,
+        candidate_pool: int = 100,
+        enable_clip: bool = True,
+        enable_objects: bool = False,
+        enable_metadata: bool = False,
+        object_label: str = "",
+        object_min_count: int = 1,
+        object_position: str = "any",
+        object_min_confidence: float = 0.3,
+        metadata_author: str | None = None,
+        metadata_date: str | None = None,
+        metadata_title: str | None = None,
+        fusion_method: str = "rrf",
+        object_filter_mode: str = "soft",
+        metadata_filter_mode: str = "soft",
+        matched_frames_per_video: int = DEFAULT_MATCHED_FRAMES_PER_VIDEO,
+    ) -> dict[str, Any]:
+        query = query.strip()
+        if not query:
+            raise ValueError("query must not be empty")
+        _require_positive("top_k", top_k); _require_positive("candidate_pool", candidate_pool)
+        _require_positive("object_min_count", object_min_count); _require_positive("matched_frames_per_video", matched_frames_per_video)
+        if enable_objects and not object_label.strip():
+            raise ValueError("object_label is required when objects are enabled")
+        horizontal, vertical = parse_object_position(object_position)
+        object_constraints = (
+            ObjectConstraint((object_label.strip(),), ">=", object_min_count, horizontal, vertical, object_min_confidence, 0.5, object_filter_mode),
+        ) if enable_objects else ()
+        structured_query = StructuredQuery(
+            visual_text=query, enable_clip=enable_clip, enable_objects=enable_objects, enable_metadata=enable_metadata,
+            clip_mode="soft" if enable_clip else "disabled", object_constraints=object_constraints,
+            metadata_constraints=MetadataConstraints(channel=metadata_author or None, publish_date=metadata_date or None, title_phrase=metadata_title or None),
+            metadata_mode=metadata_filter_mode if enable_metadata else "disabled", clip_candidate_pool=max(candidate_pool, top_k), fusion_method=fusion_method,
+        )
+        started = time.perf_counter()
+        encode_started = time.perf_counter()
+        query_vector = self._encoder().encode_text(query) if enable_clip or enable_metadata else None
+        encode_ms = (time.perf_counter() - encode_started) * 1000
+        candidate_started = time.perf_counter()
+        candidate_payload = self.structured_generator.generate(structured_query, query_vector)
+        candidate_ms = (time.perf_counter() - candidate_started) * 1000
+        fusion_started = time.perf_counter()
+        ranked = rank_video_candidates(candidate_payload, structured_query, RrfConfig(), min(top_k, 50), min(matched_frames_per_video, 50))
+        fusion_ms = (time.perf_counter() - fusion_started) * 1000
+        ranked["video_results"] = [self.enrich_video_result(item) for item in ranked["video_results"]]
+        ranked["video_groups"] = ranked["video_results"]
+        ranked["results"] = [self.enrich_result(item) for item in ranked["results"]]
+        ranked["raw_results"] = [self.enrich_result(item) for item in ranked["raw_results"]]
+        for result in ranked["video_results"]:
+            result["evidence"] = self.structured_evidence(result, structured_query, ranked["fusion_config"])
+        evidence_by_video = {item["video_id"]: item["evidence"] for item in ranked["video_results"]}
+        for result in ranked["results"]:
+            result["evidence"] = evidence_by_video[result["video_id"]]
+        for result in ranked["raw_results"]:
+            result["evidence"] = evidence_by_video.get(result["video_id"], result.get("evidence", {}))
+        return {
+            "mode":"structured", "experimental":True, "default_search_unchanged":True, "query":query,
+            "structured_query":asdict(structured_query), "candidate_pool":candidate_pool, "top_k":top_k,
+            "encode_ms":round(encode_ms,3), "candidate_generation_ms":round(candidate_ms,3), "fusion_ms":round(fusion_ms,3),
+            "elapsed_ms":round((time.perf_counter()-started)*1000,3), "channel_counts":candidate_payload["channel_counts"],
+            "unknown_object_frame_count":candidate_payload["unknown_object_frame_count"], **ranked,
+        }
+
+    def structured_evidence(self, result: dict[str, Any], query: StructuredQuery, fusion_config: dict[str, Any]) -> dict[str, Any]:
+        ranks = result["modality_ranks"]
+        clip_enabled = query.enable_clip and query.clip_mode != "disabled"
+        object_enabled = query.enable_objects and any(item.filter_mode != "disabled" for item in query.object_constraints)
+        metadata_enabled = query.enable_metadata and query.metadata_mode != "disabled"
+        video_frames = self.refs_by_video.get(result["video_id"], [])
+        clip_status = "matched" if ranks["clip"] is not None else ("not_matched" if clip_enabled and video_frames else ("unknown" if clip_enabled else "disabled"))
+        object_data = self.object_service.video_data_status(result["video_id"]) if object_enabled and self.object_service else {"status":"UNKNOWN","available_frames":0,"unknown_frames":len(video_frames)}
+        if not object_enabled: object_status = "disabled"
+        elif ranks["object"] is not None: object_status = "matched"
+        elif object_data["unknown_frames"]: object_status = "unknown"
+        else: object_status = "not_matched"
+        metadata_known = any(doc.video_id == result["video_id"] for doc in self.metadata_docs)
+        metadata_status = "matched" if ranks["metadata"] is not None else ("not_matched" if metadata_enabled and metadata_known else ("unknown" if metadata_enabled else "disabled"))
+        object_matches = []
+        metadata_match = None
+        clip_scores = []
+        for frame in result["frames"]:
+            if frame.get("clip_score") is not None: clip_scores.append(frame["clip_score"])
+            object_matches.extend(frame.get("evidence", {}).get("object", []))
+            metadata_match = metadata_match or frame.get("evidence", {}).get("metadata")
+        return {
+            "clip":{"enabled":clip_enabled,"status":clip_status,"rank":ranks["clip"],"score":max(clip_scores) if clip_scores else None},
+            "objects":{"enabled":object_enabled,"status":object_status,"rank":ranks["object"],"data_coverage":object_data,"matches":object_matches},
+            "metadata":{"enabled":metadata_enabled,"status":metadata_status,"rank":ranks["metadata"],"level":"video","matched_fields":metadata_match["evidence"] if metadata_match else []},
+            "fusion":{"method":"rrf","config":fusion_config}, "representative_rule":result["representative_rule"],
         }
 
     def keyframe_neighborhood(self, video_id: str, keyframe_id: int, radius: int = 3) -> dict[str, Any]:
@@ -305,10 +412,13 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "default_ranking_mode": "video",
                         "default_aggregation_method": DEFAULT_AGGREGATION_METHOD,
                         "default_candidate_pool_size": DEFAULT_CANDIDATE_POOL_SIZE,
+                        "structured_search_available": service.object_service is not None,
                     }
                 )
             elif parsed.path == "/api/search":
                 self._handle_search(parsed.query)
+            elif parsed.path == "/api/structured-search":
+                self._handle_structured_search(parsed.query)
             elif parsed.path == "/api/metadata-search":
                 self._handle_metadata_search(parsed.query)
             elif parsed.path == "/api/neighborhood":
@@ -372,6 +482,23 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             except Exception as exc:  # UI boundary: return a readable error to the browser.
                 self._error(HTTPStatus.BAD_REQUEST, str(exc))
                 return
+            self._json(payload)
+
+        def _handle_structured_search(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                payload = service.structured_search(
+                    first(params,"q"), top_k=parse_int(first(params,"top_k","12"),12), candidate_pool=parse_int(first(params,"candidate_pool","100"),100),
+                    enable_clip=parse_bool(first(params,"enable_clip","true")), enable_objects=parse_bool(first(params,"enable_objects","false")),
+                    enable_metadata=parse_bool(first(params,"enable_metadata","false")), object_label=first(params,"object_label"),
+                    object_min_count=parse_int(first(params,"object_min_count","1"),1), object_position=first(params,"object_position","any"),
+                    object_min_confidence=parse_float(first(params,"object_min_confidence","0.3"),0.3), metadata_author=first(params,"metadata_author") or None,
+                    metadata_date=first(params,"metadata_date") or None, metadata_title=first(params,"metadata_title") or None,
+                    fusion_method=first(params,"fusion_method","rrf"), object_filter_mode=first(params,"object_filter_mode","soft"),
+                    metadata_filter_mode=first(params,"metadata_filter_mode","soft"), matched_frames_per_video=parse_int(first(params,"matched_frames_per_video","5"),5),
+                )
+            except Exception as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
             self._json(payload)
 
         def _handle_neighborhood(self, query_string: str) -> None:
@@ -462,6 +589,28 @@ def parse_int(value: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def parse_float(value: str, default: float) -> float:
+    try: return float(value)
+    except ValueError: return default
+
+
+def parse_bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1","true","yes","on"}: return True
+    if normalized in {"0","false","no","off"}: return False
+    raise ValueError(f"invalid boolean: {value}")
+
+
+def parse_object_position(value: str) -> tuple[str, str]:
+    value = value.strip().lower() or "any"
+    if value in {"any","left","center","right"}: return value, "any"
+    if value in {"top","middle","bottom"}: return "any", value
+    if ":" in value:
+        horizontal, vertical = value.split(":",1)
+        if horizontal in {"any","left","center","right"} and vertical in {"any","top","middle","bottom"}: return horizontal, vertical
+    raise ValueError(f"invalid object_position: {value}")
 
 
 def _require_positive(name: str, value: int) -> None:

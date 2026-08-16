@@ -6,6 +6,7 @@ import re
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -38,9 +39,12 @@ NORMALIZED_PHRASE_BONUSES = {
 @dataclass(frozen=True)
 class MetadataDocument:
     video_id: str
+    group: str
     title: str
     author: str
+    channel_id: str
     publish_date: str
+    duration: float | None
     keywords: list[str]
     description: str
     watch_url: str
@@ -63,6 +67,20 @@ class MetadataSearchResult:
     keywords: list[str]
     description_preview: str
     watch_url: str
+
+
+@dataclass(frozen=True)
+class MetadataConstraints:
+    groups: tuple[str, ...] = ()
+    video_ids: tuple[str, ...] = ()
+    channel: str | None = None
+    publish_date: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    duration_min: float | None = None
+    duration_max: float | None = None
+    title_phrase: str | None = None
+    keywords: tuple[str, ...] = ()
 
 
 def load_metadata_documents(media_dir: Path, groups: set[str] | None = None) -> list[MetadataDocument]:
@@ -101,9 +119,12 @@ def document_from_payload(video_id: str, payload: dict[str, Any]) -> MetadataDoc
             original_token_weights[token] += count * weight
     return MetadataDocument(
         video_id=video_id,
+        group=video_id.split("_", 1)[0] if "_" in video_id else "",
         title=fields["title"],
         author=fields["author"],
+        channel_id=str(payload.get("channel_id", "") or ""),
         publish_date=fields["publish_date"],
+        duration=float(payload.get("duration", payload.get("length"))) if payload.get("duration", payload.get("length")) not in (None, "") else None,
         keywords=keywords,
         description=description,
         watch_url=str(payload.get("watch_url", "") or ""),
@@ -225,3 +246,86 @@ def normalize_for_search(text: str) -> str:
 
 def results_to_dict(results: list[MetadataSearchResult]) -> list[dict[str, Any]]:
     return [asdict(result) for result in results]
+
+
+def parse_metadata_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    for pattern in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%Y%m%d", "%d%m%Y"):
+        try:
+            return datetime.strptime(value.strip(), pattern).date()
+        except ValueError:
+            continue
+    return None
+
+
+def phrase_match_kind(query: str, value: str) -> str | None:
+    original_query = normalize_metadata_text(query).lower()
+    original_value = normalize_metadata_text(value).lower()
+    if original_query and original_query in original_value:
+        return "exact_original_phrase"
+    normalized_query = normalize_for_search(query)
+    if normalized_query and normalized_query in normalize_for_search(value):
+        return "normalized_accent_insensitive_phrase"
+    return None
+
+
+def filter_metadata_documents(docs: Iterable[MetadataDocument], constraints: MetadataConstraints) -> list[dict[str, Any]]:
+    if constraints.duration_min is not None and constraints.duration_max is not None and constraints.duration_min > constraints.duration_max:
+        raise ValueError("duration_min must not exceed duration_max")
+    start, end = parse_metadata_date(constraints.date_from), parse_metadata_date(constraints.date_to)
+    exact_date = parse_metadata_date(constraints.publish_date)
+    if constraints.date_from and start is None or constraints.date_to and end is None or constraints.publish_date and exact_date is None:
+        raise ValueError("metadata dates must use DD/MM/YYYY, YYYY-MM-DD, DD-MM-YYYY, YYYYMMDD or DDMMYYYY")
+    if start and end and start > end:
+        raise ValueError("date_from must not exceed date_to")
+    results = []
+    for doc in docs:
+        evidence: list[dict[str, Any]] = []
+        if constraints.groups and doc.group not in constraints.groups:
+            continue
+        if constraints.groups: evidence.append({"field":"group", "value":doc.group, "match_kind":"exact"})
+        if constraints.video_ids and doc.video_id not in constraints.video_ids:
+            continue
+        if constraints.video_ids: evidence.append({"field":"video_id", "value":doc.video_id, "match_kind":"exact"})
+        if constraints.channel:
+            kinds = [("author", phrase_match_kind(constraints.channel, doc.author)), ("channel_id", "exact" if constraints.channel == doc.channel_id else None)]
+            field, kind = next(((field, kind) for field, kind in kinds if kind), (None, None))
+            if kind is None: continue
+            evidence.append({"field":field, "value":doc.author if field == "author" else doc.channel_id, "match_kind":kind})
+        doc_date = parse_metadata_date(doc.publish_date)
+        if exact_date is not None and doc_date != exact_date: continue
+        if exact_date is not None: evidence.append({"field":"publish_date", "value":doc.publish_date, "match_kind":"exact"})
+        if start is not None and (doc_date is None or doc_date < start): continue
+        if end is not None and (doc_date is None or doc_date > end): continue
+        if start is not None or end is not None: evidence.append({"field":"publish_date", "value":doc.publish_date, "match_kind":"range"})
+        if constraints.duration_min is not None and (doc.duration is None or doc.duration < constraints.duration_min): continue
+        if constraints.duration_max is not None and (doc.duration is None or doc.duration > constraints.duration_max): continue
+        if constraints.duration_min is not None or constraints.duration_max is not None: evidence.append({"field":"duration", "value":doc.duration, "match_kind":"range"})
+        if constraints.title_phrase:
+            kind = phrase_match_kind(constraints.title_phrase, doc.title)
+            if kind is None: continue
+            evidence.append({"field":"title", "value":doc.title, "match_kind":kind})
+        keyword_evidence = []
+        for keyword in constraints.keywords:
+            kind = phrase_match_kind(keyword, " ".join(doc.keywords))
+            if kind is None: break
+            keyword_evidence.append({"field":"keywords", "value":keyword, "match_kind":kind})
+        else:
+            evidence.extend(keyword_evidence)
+            exact_count = sum(item["match_kind"] in {"exact", "exact_original_phrase"} for item in evidence)
+            normalized_count = sum(item["match_kind"] == "normalized_accent_insensitive_phrase" for item in evidence)
+            results.append({"video_id":doc.video_id, "metadata_level":"video", "metadata_score":None, "evidence":evidence,
+                            "title":doc.title, "author":doc.author, "channel_id":doc.channel_id, "publish_date":doc.publish_date,
+                            "duration":doc.duration, "keywords":doc.keywords, "_exact_count":exact_count, "_normalized_count":normalized_count})
+    results.sort(key=lambda item: (-item["_exact_count"], item["_normalized_count"], item["video_id"]))
+    for rank, item in enumerate(results, start=1):
+        item["metadata_rank"] = rank
+        item.pop("_exact_count"); item.pop("_normalized_count")
+    return results
+
+
+def has_metadata_constraints(constraints: MetadataConstraints) -> bool:
+    return any((constraints.groups, constraints.video_ids, constraints.channel, constraints.publish_date, constraints.date_from,
+                constraints.date_to, constraints.duration_min is not None, constraints.duration_max is not None,
+                constraints.title_phrase, constraints.keywords))

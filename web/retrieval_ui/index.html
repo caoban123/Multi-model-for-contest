@@ -63,6 +63,49 @@
             </label>
             <button id="search-button" class="search-button" type="submit">Search <span aria-hidden="true">→</span></button>
           </div>
+
+          <details id="structured-filters" class="structured-filters">
+            <summary>Structured Filters <span>Experimental · opt-in</span></summary>
+            <div class="structured-content">
+              <div class="structured-toolbar">
+                <label class="check-field"><input id="structured-enabled" type="checkbox"> Use experimental structured retrieval</label>
+                <label>
+                  <span>Debug preset</span>
+                  <select id="debug-mode">
+                    <option value="custom">Custom</option>
+                    <option value="clip-only">CLIP only</option>
+                    <option value="object-only">Object only</option>
+                    <option value="metadata-only">Metadata only</option>
+                    <option value="hybrid">Hybrid</option>
+                  </select>
+                </label>
+                <label><span>Fusion method</span><select id="fusion-method"><option value="rrf">RRF</option></select></label>
+              </div>
+              <div class="modality-switches" aria-label="Structured retrieval modalities">
+                <label class="check-field"><input id="enable-clip" type="checkbox" checked> CLIP</label>
+                <label class="check-field"><input id="enable-objects" type="checkbox"> Objects</label>
+                <label class="check-field"><input id="enable-metadata" type="checkbox"> Metadata</label>
+              </div>
+              <div class="structured-groups">
+                <fieldset id="object-fields" disabled>
+                  <legend>Object evidence</legend>
+                  <label><span>Object label</span><input id="object-label" type="text" placeholder="phone / điện thoại"></label>
+                  <label><span>Minimum count</span><input id="object-min-count" type="number" min="1" value="1"></label>
+                  <label><span>Position</span><select id="object-position"><option>any</option><option>left</option><option>center</option><option>right</option><option>top</option><option>middle</option><option>bottom</option></select></label>
+                  <label><span>Minimum confidence</span><input id="object-min-confidence" type="number" min="0" max="1" step="0.1" value="0.3"></label>
+                  <label><span>Constraint mode</span><select id="object-filter-mode"><option value="soft">Soft support</option><option value="hard">Hard requirement</option></select></label>
+                </fieldset>
+                <fieldset id="metadata-fields" disabled>
+                  <legend>Metadata evidence · video level</legend>
+                  <label><span>Author / Channel</span><input id="metadata-author" type="text" placeholder="60 Giây Official"></label>
+                  <label><span>Publish date</span><input id="metadata-date" type="text" placeholder="2024-08-21"></label>
+                  <label><span>Title phrase</span><input id="metadata-title" type="text" placeholder="60 Giây Sáng"></label>
+                  <label><span>Constraint mode</span><select id="metadata-filter-mode"><option value="soft">Soft support</option><option value="hard">Hard requirement</option></select></label>
+                </fieldset>
+              </div>
+              <p class="structured-note">Structured mode is experimental. Turning it off keeps the Phase 3 CLIP search path unchanged.</p>
+            </div>
+          </details>
         </form>
       </section>
 
@@ -128,6 +171,7 @@
             <div><dt>Date</dt><dd class="date"></dd></div>
           </dl>
           <div class="keywords"></div>
+          <div class="evidence-chips" aria-label="Retrieval evidence"></div>
           <div class="review-panel">
             <div class="card-actions">
               <button class="pin-button secondary-button" type="button" aria-pressed="false">Pin</button>

@@ -353,3 +353,42 @@ Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 ca
 ## Bước Tiếp Theo Đề Xuất
 
 Phase 3 implementation đã có max-score video aggregation, unique-video ranking, representative frame, matched-frame expansion, Frame Ranking debug và L21 neighbor timeline. Bước tiếp theo là bổ sung đầy đủ ảnh keyframe L21 và chấm manual relevance cho benchmark before/after; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.
+
+## Phase 4 — Structured Retrieval (Hybrid Opt-In)
+
+Phase 4 giữ `/api/search` và UI CLIP Phase 3 làm mặc định. Structured retrieval chỉ chạy khi gọi `/api/structured-search` hoặc bật **Use experimental structured retrieval** trong panel **Structured Filters**.
+
+Build/audit object store L21:
+
+```powershell
+python tools\audit_structured_data.py
+python tools\build_object_store.py
+python tools\object_search.py --labels "điện thoại" --min-confidence 0.3 --limit 10
+```
+
+Chạy UI (object store được nạp từ đường dẫn mặc định dưới `artifacts/structured`):
+
+```powershell
+python tools\retrieval_ui.py `
+  --clip-cache-dir artifacts\models `
+  --clip-local-files-only
+```
+
+Ví dụ endpoint opt-in:
+
+```text
+/api/structured-search?q=a+person+holding+a+phone&top_k=12&candidate_pool=100&enable_clip=true&enable_objects=true&object_label=phone&object_min_count=1&object_position=any&object_min_confidence=0.3&enable_metadata=false&fusion_method=rrf
+```
+
+Evidence phân biệt `matched`, `not_matched`, `unknown` và `disabled`. `unknown` nghĩa là thiếu object data, không phải “không phát hiện object”. Metadata luôn là evidence cấp video; representative frame phải đến từ CLIP/object evidence thật.
+
+Chạy baseline và ablation:
+
+```powershell
+python tools\phase4_baseline.py --clip-cache-dir artifacts\models --clip-local-files-only
+python tools\phase4_benchmark.py --clip-cache-dir artifacts\models --clip-local-files-only
+```
+
+Output được tạo dưới `artifacts/benchmarks/phase4/` và không commit. `ablation_v1_review.csv` có cột chấm tay và evidence CLIP/object/metadata/RRF. Khi chưa có manual ground truth, Recall/MRR/NDCG được ghi `null/unavailable`; không được diễn giải là 0.
+
+Quyết định P4.10: **HYBRID OPT-IN**. Implementation, API, UI và ablation pipeline đã hoàn thành; quality verification/default promotion vẫn chờ manual judgement. Không đổi framework, model, vector database, OCR/ASR hoặc detector.

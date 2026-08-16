@@ -93,3 +93,21 @@ def test_retrieval_ui_explores_matched_frames_and_reuses_neighborhood_api() -> N
     styles = (ROOT / "web" / "retrieval_ui" / "styles.css").read_text(encoding="utf-8")
     assert ".explore-panel[hidden]" in styles
     assert ".neighborhood-panel[hidden]" in styles
+
+
+def test_retrieval_ui_has_opt_in_structured_controls_and_evidence() -> None:
+    html = (ROOT / "web" / "retrieval_ui" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+    for control_id in ("structured-filters","structured-enabled","debug-mode","enable-clip","enable-objects","enable-metadata","object-label","object-min-count","object-position","object-min-confidence","metadata-author","metadata-date","metadata-title","fusion-method"):
+        assert f'id="{control_id}"' in html
+    assert "/api/structured-search" in script
+    assert "Object evidence unavailable" in script
+    assert "renderEvidenceChips" in script
+    assert "structured_config" in script
+    assert "applyStructuredConfig" in script
+
+
+def test_retrieval_ui_exports_structured_evidence_fields() -> None:
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+    for field in ("clip_score","clip_rank","object_score","object_rank","matched_objects","metadata_score","metadata_rank","matched_metadata_fields","fusion_score","fusion_rank","fusion_method"):
+        assert f'"{field}"' in script

@@ -22,6 +22,23 @@ const historyListEl = document.querySelector("#history-list");
 const pinsCountEl = document.querySelector("#pins-count");
 const historyCountEl = document.querySelector("#history-count");
 const resultTemplate = document.querySelector("#result-template");
+const structuredEnabledInput = document.querySelector("#structured-enabled");
+const debugModeInput = document.querySelector("#debug-mode");
+const enableClipInput = document.querySelector("#enable-clip");
+const enableObjectsInput = document.querySelector("#enable-objects");
+const enableMetadataInput = document.querySelector("#enable-metadata");
+const objectFields = document.querySelector("#object-fields");
+const metadataFields = document.querySelector("#metadata-fields");
+const objectLabelInput = document.querySelector("#object-label");
+const objectMinCountInput = document.querySelector("#object-min-count");
+const objectPositionInput = document.querySelector("#object-position");
+const objectMinConfidenceInput = document.querySelector("#object-min-confidence");
+const objectFilterModeInput = document.querySelector("#object-filter-mode");
+const metadataAuthorInput = document.querySelector("#metadata-author");
+const metadataDateInput = document.querySelector("#metadata-date");
+const metadataTitleInput = document.querySelector("#metadata-title");
+const metadataFilterModeInput = document.querySelector("#metadata-filter-mode");
+const fusionMethodInput = document.querySelector("#fusion-method");
 let currentPayload = null;
 let reviewState = new Map();
 let activeMode = "visual";
@@ -102,6 +119,63 @@ function saveStoredArray(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+function structuredConfig() {
+  return {
+    enabled: structuredEnabledInput.checked,
+    enable_clip: enableClipInput.checked,
+    enable_objects: enableObjectsInput.checked,
+    enable_metadata: enableMetadataInput.checked,
+    object_label: objectLabelInput.value.trim(),
+    object_min_count: objectMinCountInput.value,
+    object_position: objectPositionInput.value,
+    object_min_confidence: objectMinConfidenceInput.value,
+    object_filter_mode: objectFilterModeInput.value,
+    metadata_author: metadataAuthorInput.value.trim(),
+    metadata_date: metadataDateInput.value.trim(),
+    metadata_title: metadataTitleInput.value.trim(),
+    metadata_filter_mode: metadataFilterModeInput.value,
+    fusion_method: fusionMethodInput.value,
+    debug_mode: debugModeInput.value,
+  };
+}
+
+function applyStructuredConfig(config = {}) {
+  structuredEnabledInput.checked = Boolean(config.enabled);
+  enableClipInput.checked = config.enable_clip ?? true;
+  enableObjectsInput.checked = Boolean(config.enable_objects);
+  enableMetadataInput.checked = Boolean(config.enable_metadata);
+  objectLabelInput.value = config.object_label || "";
+  objectMinCountInput.value = config.object_min_count || "1";
+  objectPositionInput.value = config.object_position || "any";
+  objectMinConfidenceInput.value = config.object_min_confidence || "0.3";
+  objectFilterModeInput.value = config.object_filter_mode || "soft";
+  metadataAuthorInput.value = config.metadata_author || "";
+  metadataDateInput.value = config.metadata_date || "";
+  metadataTitleInput.value = config.metadata_title || "";
+  metadataFilterModeInput.value = config.metadata_filter_mode || "soft";
+  fusionMethodInput.value = config.fusion_method || "rrf";
+  debugModeInput.value = config.debug_mode || "custom";
+  updateStructuredControls();
+}
+
+function updateStructuredControls() {
+  const enabled = structuredEnabledInput.checked && activeMode === "visual";
+  for (const input of [debugModeInput, enableClipInput, enableObjectsInput, enableMetadataInput, fusionMethodInput]) {
+    input.disabled = !enabled;
+  }
+  objectFields.disabled = !enabled || !enableObjectsInput.checked;
+  metadataFields.disabled = !enabled || !enableMetadataInput.checked;
+}
+
+function applyDebugPreset() {
+  const preset = debugModeInput.value;
+  if (preset === "custom") return;
+  enableClipInput.checked = ["clip-only", "hybrid"].includes(preset);
+  enableObjectsInput.checked = ["object-only", "hybrid"].includes(preset);
+  enableMetadataInput.checked = ["metadata-only", "hybrid"].includes(preset);
+  updateStructuredControls();
+}
+
 function displayedResults(payload) {
   if (payload.mode === "metadata") {
     return (payload.results || []).map((item) => normalizeResult(item, "metadata"));
@@ -137,6 +211,10 @@ function renderResults(payload, resetReview = true) {
     statusItems.push(`Pool ${candidates}`);
     statusItems.push(`Retrieval ${Number(payload.retrieval_ms || 0).toFixed(1)} ms`);
     statusItems.push(`Aggregation ${Number(payload.aggregation_ms || 0).toFixed(1)} ms`);
+  } else if (payload.mode === "structured") {
+    statusItems.push(`Union ${candidates}`);
+    statusItems.push(`Candidates ${Number(payload.candidate_generation_ms || 0).toFixed(1)} ms`);
+    statusItems.push(`RRF ${Number(payload.fusion_ms || 0).toFixed(1)} ms`);
   } else {
     statusItems.push(`${Number(payload.elapsed_ms || 0).toFixed(1)} ms`);
   }
@@ -181,6 +259,7 @@ function renderResults(payload, resetReview = true) {
       pill.textContent = keyword;
       keywords.appendChild(pill);
     }
+    renderEvidenceChips(node.querySelector(".evidence-chips"), result);
     const pinButton = node.querySelector(".pin-button");
     const isPinned = pinnedResults.some((item) => item.key === resultKey(result));
     pinButton.classList.toggle("is-active", isPinned);
@@ -224,6 +303,35 @@ function normalizeResult(result, mode) {
   };
 }
 
+function renderEvidenceChips(container, result) {
+  container.replaceChildren();
+  const evidence = result.evidence;
+  if (!evidence?.fusion) return;
+  const definitions = [];
+  if (evidence.clip.enabled) {
+    definitions.push({ status: evidence.clip.status, text: evidence.clip.status === "matched"
+      ? `CLIP #${evidence.clip.rank} · ${Number(evidence.clip.score || 0).toFixed(4)}`
+      : `CLIP · ${evidence.clip.status}` });
+  }
+  if (evidence.objects.enabled) {
+    definitions.push({ status: evidence.objects.status, text: evidence.objects.status === "unknown"
+      ? "Object evidence unavailable"
+      : evidence.objects.status === "matched" ? `Object #${evidence.objects.rank} · matched` : "Object · not matched" });
+  }
+  if (evidence.metadata.enabled) {
+    definitions.push({ status: evidence.metadata.status, text: evidence.metadata.status === "matched"
+      ? `Metadata #${evidence.metadata.rank} · ${evidence.metadata.matched_fields.map((item) => item.field).join("+") || "matched"}`
+      : `Metadata · ${evidence.metadata.status}` });
+  }
+  definitions.push({ status: "matched", text: `Final #${result.rank} · RRF` });
+  for (const definition of definitions) {
+    const chip = document.createElement("span");
+    chip.className = `evidence-chip is-${definition.status}`;
+    chip.textContent = definition.text;
+    container.appendChild(chip);
+  }
+}
+
 function normalizeVideoResult(result) {
   return {
     ...result,
@@ -253,12 +361,23 @@ async function runSearch(event) {
     matched_frames_per_video: "5",
     aggregation_method: "max",
   });
+  const structured = activeMode === "visual" ? structuredConfig() : { enabled: false };
+  if (structured.enabled) {
+    for (const [key, value] of Object.entries(structured)) {
+      if (key !== "enabled" && key !== "debug_mode" && value !== "") params.set(key, String(value));
+    }
+    params.set("matched_frames_per_video", "5");
+    params.delete("max_frames_per_video");
+    params.delete("aggregation_method");
+  }
   searchButton.disabled = true;
   const searchButtonLabel = searchButton.innerHTML;
   searchButton.textContent = activeMode === "metadata" ? "Searching metadata..." : "Searching...";
   setStatus(activeMode === "metadata" ? "Searching metadata..." : "Encoding query and searching...");
   try {
-    const endpoint = activeMode === "metadata" ? "/api/metadata-search" : "/api/search";
+    const endpoint = activeMode === "metadata"
+      ? "/api/metadata-search"
+      : structured.enabled ? "/api/structured-search" : "/api/search";
     if (activeMode === "metadata") {
       params.delete("candidate_pool");
       params.delete("max_frames_per_video");
@@ -269,7 +388,7 @@ async function runSearch(event) {
     payload.original_query = originalQuery;
     payload.clip_query = activeMode === "visual" ? query : "";
     payload.mode = payload.mode || activeMode;
-    saveHistoryItem(originalQuery, payload.clip_query, payload.mode);
+    saveHistoryItem(originalQuery, payload.clip_query, activeMode, structured.enabled ? structured : null, payload.fusion_config || null);
     renderResults(payload);
     renderHistory();
   } catch (error) {
@@ -280,17 +399,20 @@ async function runSearch(event) {
   }
 }
 
-function saveHistoryItem(originalQuery, clipQuery, mode) {
+function saveHistoryItem(originalQuery, clipQuery, mode, structured = null, fusionConfig = null) {
   const item = {
     mode,
+    retrieval_mode: structured ? "structured" : mode,
     original_query: originalQuery,
     clip_query: clipQuery,
+    structured_config: structured,
+    fusion_config: fusionConfig,
     created_at: new Date().toISOString(),
   };
   searchHistory = [
     item,
     ...searchHistory.filter(
-      (entry) => entry.mode !== mode || entry.original_query !== originalQuery || entry.clip_query !== clipQuery
+      (entry) => entry.mode !== mode || entry.original_query !== originalQuery || entry.clip_query !== clipQuery || JSON.stringify(entry.structured_config) !== JSON.stringify(structured)
     ),
   ].slice(0, 30);
   saveStoredArray(STORAGE_KEYS.history, searchHistory);
@@ -550,6 +672,26 @@ function csvEscape(value) {
   return text;
 }
 
+function evidenceCsvFields(result) {
+  const evidence = result.evidence || {};
+  const objectMatches = evidence.objects?.matches || [];
+  const matchedObjects = [...new Set(objectMatches.flatMap((item) => item.matched_labels || item.detections?.map((detection) => detection.label_normalized) || []))].join("|");
+  const objectScores = objectMatches.map((item) => Number(item.object_score)).filter(Number.isFinite);
+  return {
+    clip_score: result.clip_score ?? evidence.clip?.score ?? "",
+    clip_rank: result.clip_rank ?? evidence.clip?.rank ?? "",
+    object_score: result.object_score ?? (objectScores.length ? Math.max(...objectScores) : ""),
+    object_rank: result.object_rank ?? evidence.objects?.rank ?? "",
+    matched_objects: matchedObjects,
+    metadata_score: result.metadata_score ?? "",
+    metadata_rank: result.metadata_rank ?? evidence.metadata?.rank ?? "",
+    matched_metadata_fields: (evidence.metadata?.matched_fields || []).map((item) => item.field).join("|"),
+    fusion_score: result.fusion_score ?? (evidence.fusion ? result.video_score ?? result.score : ""),
+    fusion_rank: evidence.fusion ? result.rank : "",
+    fusion_method: evidence.fusion?.method || currentPayload?.fusion_method || "",
+  };
+}
+
 function buildCsvRows() {
   if (!currentPayload) {
     return [];
@@ -570,6 +712,17 @@ function buildCsvRows() {
     "video_score",
     "frame_count",
     "aggregation_method",
+    "clip_score",
+    "clip_rank",
+    "object_score",
+    "object_rank",
+    "matched_objects",
+    "metadata_score",
+    "metadata_rank",
+    "matched_metadata_fields",
+    "fusion_score",
+    "fusion_rank",
+    "fusion_method",
     "manual_judgement",
     "manual_notes",
     "title",
@@ -580,6 +733,7 @@ function buildCsvRows() {
   const rows = [headers];
   for (const result of displayedResults(currentPayload)) {
     const state = reviewState.get(resultKey(result)) || {};
+    const evidence = evidenceCsvFields(result);
     rows.push([
       queryId,
       currentPayload.original_query || currentPayload.query || "",
@@ -595,6 +749,17 @@ function buildCsvRows() {
       result.video_score ?? "",
       result.frame_count ?? "",
       result.aggregation_method ?? "",
+      evidence.clip_score,
+      evidence.clip_rank,
+      evidence.object_score,
+      evidence.object_rank,
+      evidence.matched_objects,
+      evidence.metadata_score,
+      evidence.metadata_rank,
+      evidence.matched_metadata_fields,
+      evidence.fusion_score,
+      evidence.fusion_rank,
+      evidence.fusion_method,
       state.manual_judgement || "",
       state.manual_notes || "",
       result.metadata.title || "",
@@ -620,6 +785,17 @@ function buildPinnedCsvRows() {
     "score",
     "video_score",
     "frame_count",
+    "clip_score",
+    "clip_rank",
+    "object_score",
+    "object_rank",
+    "matched_objects",
+    "metadata_score",
+    "metadata_rank",
+    "matched_metadata_fields",
+    "fusion_score",
+    "fusion_rank",
+    "fusion_method",
     "title",
     "author",
     "publish_date",
@@ -628,6 +804,7 @@ function buildPinnedCsvRows() {
   const rows = [headers];
   for (const item of pinnedResults) {
     const result = item.result;
+    const evidence = evidenceCsvFields(result);
     rows.push([
       item.pinned_at,
       item.query_text,
@@ -641,6 +818,17 @@ function buildPinnedCsvRows() {
       result.score,
       result.video_score ?? "",
       result.frame_count ?? "",
+      evidence.clip_score,
+      evidence.clip_rank,
+      evidence.object_score,
+      evidence.object_rank,
+      evidence.matched_objects,
+      evidence.metadata_score,
+      evidence.metadata_rank,
+      evidence.matched_metadata_fields,
+      evidence.fusion_score,
+      evidence.fusion_rank,
+      evidence.fusion_method,
       result.metadata?.title || "",
       result.metadata?.author || "",
       result.metadata?.publish_date || "",
@@ -743,13 +931,17 @@ function renderHistory() {
     button.textContent = item.original_query || item.clip_query;
     button.addEventListener("click", () => {
       setMode(item.mode || "visual");
+      applyStructuredConfig(item.structured_config || {});
       queryInput.value = item.original_query || "";
       clipQueryInput.value = item.clip_query || "";
       form.requestSubmit();
     });
     const meta = document.createElement("div");
     meta.className = "compact-meta";
-    meta.textContent = item.clip_query ? `${item.mode || "visual"} - ${item.clip_query}` : item.mode || "visual";
+    const modalityLabel = item.structured_config
+      ? [item.structured_config.enable_clip && "CLIP", item.structured_config.enable_objects && "Objects", item.structured_config.enable_metadata && "Metadata"].filter(Boolean).join(" + ")
+      : item.mode || "visual";
+    meta.textContent = item.clip_query ? `${item.retrieval_mode || item.mode || "visual"} · ${modalityLabel} · ${item.clip_query}` : modalityLabel;
     node.append(button, meta);
     historyListEl.appendChild(node);
   }
@@ -768,6 +960,7 @@ function setMode(mode) {
   clipQueryInput.disabled = !isVisual;
   candidatePoolInput.disabled = !isVisual;
   rankingTabs.hidden = !isVisual;
+  updateStructuredControls();
   topKLabel.textContent = isVisual
     ? (activeRankingMode === "video" ? "Top videos" : "Top frames")
     : "Top results";
@@ -846,6 +1039,11 @@ visualModeButton.addEventListener("click", () => setMode("visual"));
 metadataModeButton.addEventListener("click", () => setMode("metadata"));
 videoRankingButton.addEventListener("click", () => setRankingMode("video"));
 frameRankingButton.addEventListener("click", () => setRankingMode("frame"));
+structuredEnabledInput.addEventListener("change", updateStructuredControls);
+enableObjectsInput.addEventListener("change", () => { debugModeInput.value = "custom"; updateStructuredControls(); });
+enableMetadataInput.addEventListener("change", () => { debugModeInput.value = "custom"; updateStructuredControls(); });
+enableClipInput.addEventListener("change", () => { debugModeInput.value = "custom"; updateStructuredControls(); });
+debugModeInput.addEventListener("change", applyDebugPreset);
 resultsEl.addEventListener("click", (event) => {
   if (event.target.classList.contains("judgement-button")) {
     updateJudgement(event.target);
@@ -870,5 +1068,6 @@ resultsEl.addEventListener("input", (event) => {
 });
 renderPins();
 renderHistory();
+updateStructuredControls();
 renderEmptyResults("Ready to retrieve", "Enter a query above to explore ranked video moments.");
 loadHealth();

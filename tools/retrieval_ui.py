@@ -30,6 +30,8 @@ def main() -> int:
     parser.add_argument("--registry", type=Path, default=ROOT / "artifacts" / "registry" / "data_registry.json")
     parser.add_argument("--index-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_numpy")
     parser.add_argument("--metadata-dir", type=Path, default=ROOT / "data" / "media-info")
+    parser.add_argument("--object-store", type=Path, default=ROOT / "artifacts" / "structured" / "l21_objects.sqlite")
+    parser.add_argument("--object-aliases", type=Path, default=ROOT / "config" / "object_aliases_v1.json")
     parser.add_argument("--groups", default="L21")
     parser.add_argument("--clip-model-id", default=os.environ.get("AIC_CLIP_MODEL_ID", DEFAULT_CLIP_MODEL_ID))
     parser.add_argument("--clip-cache-dir", type=Path, default=Path(os.environ["AIC_CLIP_CACHE_DIR"]) if os.environ.get("AIC_CLIP_CACHE_DIR") else None)
@@ -64,6 +66,8 @@ def main() -> int:
             provider=args.translation_provider,
             timeout_seconds=args.translation_timeout,
         ),
+        object_store_path=args.object_store,
+        object_aliases_path=args.object_aliases,
     )
     try:
         server = run_server(config, host=args.host, port=args.port)
