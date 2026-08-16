@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 
 import aic_retrieval.retrieval_ui as retrieval_ui
+from aic_retrieval.color_attributes import ColorAttributeService
 from aic_retrieval.hybrid_candidates import StructuredCandidateGenerator
 from aic_retrieval.metadata_search import document_from_payload
 from aic_retrieval.object_search import ObjectSearchService
@@ -29,7 +30,8 @@ def make_structured_service(tmp_path: Path) -> RetrievalUiService:
     service.metadata_docs=[document_from_payload("L21_V001",{"title":"Morning news"}),document_from_payload("L21_V002",{"title":"Sports"}),document_from_payload("L21_V003",{"title":"Weather"})]
     aliases=load_alias_dictionary(Path(__file__).resolve().parents[1]/"config"/"object_aliases_v1.json")
     service.object_service=ObjectSearchService(db,aliases)
-    service.structured_generator=StructuredCandidateGenerator(index,refs,service.object_service,service.metadata_docs)
+    service.attribute_service=ColorAttributeService(tmp_path, refs)
+    service.structured_generator=StructuredCandidateGenerator(index,refs,service.object_service,service.metadata_docs,service.attribute_service)
     class Encoder:
         def encode_text(self,text): return np.array([1,0],dtype=np.float32)
     service.encoder=Encoder()
@@ -45,7 +47,7 @@ def test_structured_service_returns_complete_status_contract(tmp_path: Path) -> 
     assert by_video["L21_V001"]["evidence"]["objects"]["status"] == "unknown"
     assert by_video["L21_V003"]["evidence"]["objects"]["status"] == "not_matched"
     assert {item["evidence"]["metadata"]["status"] for item in payload["video_results"]} == {"disabled"}
-    assert all(set(item["evidence"]) >= {"clip","objects","metadata","fusion","representative_rule"} for item in payload["video_results"])
+    assert all(set(item["evidence"]) >= {"clip","objects","attributes","metadata","fusion","representative_rule"} for item in payload["video_results"])
     assert all("evidence" in item for item in payload["results"])
 
 

@@ -26,14 +26,18 @@ const structuredEnabledInput = document.querySelector("#structured-enabled");
 const debugModeInput = document.querySelector("#debug-mode");
 const enableClipInput = document.querySelector("#enable-clip");
 const enableObjectsInput = document.querySelector("#enable-objects");
+const enableAttributesInput = document.querySelector("#enable-attributes");
 const enableMetadataInput = document.querySelector("#enable-metadata");
 const objectFields = document.querySelector("#object-fields");
+const attributeFields = document.querySelector("#attribute-fields");
 const metadataFields = document.querySelector("#metadata-fields");
 const objectLabelInput = document.querySelector("#object-label");
 const objectMinCountInput = document.querySelector("#object-min-count");
 const objectPositionInput = document.querySelector("#object-position");
 const objectMinConfidenceInput = document.querySelector("#object-min-confidence");
 const objectFilterModeInput = document.querySelector("#object-filter-mode");
+const attributeColorInput = document.querySelector("#attribute-color");
+const attributeFilterModeInput = document.querySelector("#attribute-filter-mode");
 const metadataAuthorInput = document.querySelector("#metadata-author");
 const metadataDateInput = document.querySelector("#metadata-date");
 const metadataTitleInput = document.querySelector("#metadata-title");
@@ -50,6 +54,7 @@ let reviewState = new Map();
 let activeMode = "visual";
 let activeRankingMode = "video";
 let structuredSearchAvailable = false;
+let attributeSearchAvailable = false;
 const STORAGE_KEYS = {
   history: "aic_retrieval_history_v1",
   pins: "aic_retrieval_pins_v1",
@@ -131,12 +136,15 @@ function structuredConfig() {
     enabled: structuredEnabledInput.checked,
     enable_clip: enableClipInput.checked,
     enable_objects: structuredSearchAvailable && enableObjectsInput.checked,
+    enable_attributes: attributeSearchAvailable && enableAttributesInput.checked,
     enable_metadata: enableMetadataInput.checked,
     object_label: objectLabelInput.value.trim(),
     object_min_count: objectMinCountInput.value,
     object_position: objectPositionInput.value,
     object_min_confidence: objectMinConfidenceInput.value,
     object_filter_mode: objectFilterModeInput.value,
+    attribute_color: attributeColorInput.value.trim(),
+    attribute_filter_mode: attributeFilterModeInput.value,
     metadata_author: metadataAuthorInput.value.trim(),
     metadata_date: metadataDateInput.value.trim(),
     metadata_title: metadataTitleInput.value.trim(),
@@ -150,12 +158,15 @@ function applyStructuredConfig(config = {}) {
   structuredEnabledInput.checked = Boolean(config.enabled);
   enableClipInput.checked = config.enable_clip ?? true;
   enableObjectsInput.checked = Boolean(config.enable_objects);
+  enableAttributesInput.checked = Boolean(config.enable_attributes);
   enableMetadataInput.checked = Boolean(config.enable_metadata);
   objectLabelInput.value = config.object_label || "";
   objectMinCountInput.value = config.object_min_count || "1";
   objectPositionInput.value = config.object_position || "any";
   objectMinConfidenceInput.value = config.object_min_confidence || "0.3";
   objectFilterModeInput.value = config.object_filter_mode || "soft";
+  attributeColorInput.value = config.attribute_color || "";
+  attributeFilterModeInput.value = config.attribute_filter_mode || "soft";
   metadataAuthorInput.value = config.metadata_author || "";
   metadataDateInput.value = config.metadata_date || "";
   metadataTitleInput.value = config.metadata_title || "";
@@ -170,15 +181,20 @@ function updateStructuredControls() {
   if (!structuredSearchAvailable && enableObjectsInput.checked) {
     enableObjectsInput.checked = false;
   }
-  for (const input of [debugModeInput, enableClipInput, enableObjectsInput, enableMetadataInput, fusionMethodInput]) {
+  if (!attributeSearchAvailable && enableAttributesInput.checked) {
+    enableAttributesInput.checked = false;
+  }
+  for (const input of [debugModeInput, enableClipInput, enableObjectsInput, enableAttributesInput, enableMetadataInput, fusionMethodInput]) {
     input.disabled = !enabled;
   }
   enableObjectsInput.disabled = !enabled || !structuredSearchAvailable;
+  enableAttributesInput.disabled = !enabled || !attributeSearchAvailable;
   objectFields.disabled = !enabled || !structuredSearchAvailable || !enableObjectsInput.checked;
+  attributeFields.disabled = !enabled || !attributeSearchAvailable || !enableAttributesInput.checked;
   metadataFields.disabled = !enabled || !enableMetadataInput.checked;
-  structuredNoteEl.textContent = structuredSearchAvailable
+  structuredNoteEl.textContent = structuredSearchAvailable || attributeSearchAvailable
     ? "Structured mode is experimental. Turning it off keeps the Phase 3 CLIP search path unchanged."
-    : "Structured mode is experimental. Object evidence unavailable until the local SQLite object store is built.";
+    : "Structured mode is experimental. Build local evidence stores or install image support before enabling extra channels.";
 }
 
 function applyDebugPreset() {
@@ -186,6 +202,7 @@ function applyDebugPreset() {
   if (preset === "custom") return;
   enableClipInput.checked = ["clip-only", "hybrid"].includes(preset);
   enableObjectsInput.checked = structuredSearchAvailable && ["object-only", "hybrid"].includes(preset);
+  enableAttributesInput.checked = attributeSearchAvailable && ["hybrid"].includes(preset);
   enableMetadataInput.checked = ["metadata-only", "hybrid"].includes(preset);
   updateStructuredControls();
 }
@@ -335,6 +352,13 @@ function renderEvidenceChips(container, result) {
       ? "Object evidence unavailable"
       : evidence.objects.status === "matched" ? `Object #${evidence.objects.rank} · matched` : "Object · not matched" });
   }
+  if (evidence.attributes?.enabled) {
+    const matched = evidence.attributes.matches || [];
+    const colors = [...new Set(matched.map((item) => item.color).filter(Boolean))].join("+");
+    definitions.push({ status: evidence.attributes.status, text: evidence.attributes.status === "matched"
+      ? `Attribute #${evidence.attributes.rank} - ${colors || "matched"}`
+      : `Attribute - ${evidence.attributes.status}` });
+  }
   if (evidence.metadata.enabled) {
     definitions.push({ status: evidence.metadata.status, text: evidence.metadata.status === "matched"
       ? `Metadata #${evidence.metadata.rank} · ${evidence.metadata.matched_fields.map((item) => item.field).join("+") || "matched"}`
@@ -417,7 +441,7 @@ async function runSearch(event) {
   });
   const structured = activeMode === "visual" ? structuredConfig() : { enabled: false };
   if (structured.enabled) {
-    if (!structured.enable_clip && !structured.enable_objects && !structured.enable_metadata) {
+    if (!structured.enable_clip && !structured.enable_objects && !structured.enable_attributes && !structured.enable_metadata) {
       setStatus("Enable at least one structured retrieval channel.", true);
       return;
     }
@@ -751,14 +775,19 @@ function csvEscape(value) {
 function evidenceCsvFields(result) {
   const evidence = result.evidence || {};
   const objectMatches = evidence.objects?.matches || [];
+  const attributeMatches = evidence.attributes?.matches || [];
   const matchedObjects = [...new Set(objectMatches.flatMap((item) => item.matched_labels || item.detections?.map((detection) => detection.label_normalized) || []))].join("|");
   const objectScores = objectMatches.map((item) => Number(item.object_score)).filter(Number.isFinite);
+  const attributeScores = attributeMatches.map((item) => Number(item.attribute_score)).filter(Number.isFinite);
   return {
     clip_score: result.clip_score ?? evidence.clip?.score ?? "",
     clip_rank: result.clip_rank ?? evidence.clip?.rank ?? "",
     object_score: result.object_score ?? (objectScores.length ? Math.max(...objectScores) : ""),
     object_rank: result.object_rank ?? evidence.objects?.rank ?? "",
     matched_objects: matchedObjects,
+    attribute_score: result.attribute_score ?? (attributeScores.length ? Math.max(...attributeScores) : ""),
+    attribute_rank: result.attribute_rank ?? evidence.attributes?.rank ?? "",
+    matched_attributes: attributeMatches.map((item) => `${item.color}:${item.target}:${item.color_ratio}`).join("|"),
     metadata_score: result.metadata_score ?? "",
     metadata_rank: result.metadata_rank ?? evidence.metadata?.rank ?? "",
     matched_metadata_fields: (evidence.metadata?.matched_fields || []).map((item) => item.field).join("|"),
@@ -793,6 +822,9 @@ function buildCsvRows() {
     "object_score",
     "object_rank",
     "matched_objects",
+    "attribute_score",
+    "attribute_rank",
+    "matched_attributes",
     "metadata_score",
     "metadata_rank",
     "matched_metadata_fields",
@@ -836,6 +868,9 @@ function buildCsvRows() {
       evidence.object_score,
       evidence.object_rank,
       evidence.matched_objects,
+      evidence.attribute_score,
+      evidence.attribute_rank,
+      evidence.matched_attributes,
       evidence.metadata_score,
       evidence.metadata_rank,
       evidence.matched_metadata_fields,
@@ -877,6 +912,9 @@ function buildPinnedCsvRows() {
     "object_score",
     "object_rank",
     "matched_objects",
+    "attribute_score",
+    "attribute_rank",
+    "matched_attributes",
     "metadata_score",
     "metadata_rank",
     "matched_metadata_fields",
@@ -918,6 +956,9 @@ function buildPinnedCsvRows() {
       evidence.object_score,
       evidence.object_rank,
       evidence.matched_objects,
+      evidence.attribute_score,
+      evidence.attribute_rank,
+      evidence.matched_attributes,
       evidence.metadata_score,
       evidence.metadata_rank,
       evidence.matched_metadata_fields,
@@ -1057,7 +1098,7 @@ function renderHistory() {
     const meta = document.createElement("div");
     meta.className = "compact-meta";
     const modalityLabel = item.structured_config
-      ? [item.structured_config.enable_clip && "CLIP", item.structured_config.enable_objects && "Objects", item.structured_config.enable_metadata && "Metadata"].filter(Boolean).join(" + ")
+      ? [item.structured_config.enable_clip && "CLIP", item.structured_config.enable_objects && "Objects", item.structured_config.enable_attributes && "Attributes", item.structured_config.enable_metadata && "Metadata"].filter(Boolean).join(" + ")
       : item.mode || "visual";
     meta.textContent = item.clip_query ? `${item.retrieval_mode || item.mode || "visual"} · ${modalityLabel} · ${item.clip_query}` : modalityLabel;
     node.append(button, meta);
@@ -1135,9 +1176,11 @@ async function loadHealth() {
         { text: `${payload.index_dim} dim` },
         { text: `${payload.metadata_documents} videos` },
         { text: payload.structured_search_available ? "objects on" : "objects off", className: payload.structured_search_available ? "is-success" : "" },
+        { text: payload.attribute_search_available ? "attributes on" : "attributes off", className: payload.attribute_search_available ? "is-success" : "" },
         { text: translation, className: payload.translation_configured ? "is-success" : "" },
       ];
     structuredSearchAvailable = Boolean(payload.structured_search_available);
+    attributeSearchAvailable = Boolean(payload.attribute_search_available);
     updateStructuredControls();
     healthEl.replaceChildren();
     for (const badge of badges) {
@@ -1162,6 +1205,7 @@ videoRankingButton.addEventListener("click", () => setRankingMode("video"));
 frameRankingButton.addEventListener("click", () => setRankingMode("frame"));
 structuredEnabledInput.addEventListener("change", updateStructuredControls);
 enableObjectsInput.addEventListener("change", () => { debugModeInput.value = "custom"; updateStructuredControls(); });
+enableAttributesInput.addEventListener("change", () => { debugModeInput.value = "custom"; updateStructuredControls(); });
 enableMetadataInput.addEventListener("change", () => { debugModeInput.value = "custom"; updateStructuredControls(); });
 enableClipInput.addEventListener("change", () => { debugModeInput.value = "custom"; updateStructuredControls(); });
 debugModeInput.addEventListener("change", applyDebugPreset);

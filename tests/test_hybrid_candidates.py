@@ -31,7 +31,7 @@ def test_three_channel_union_preserves_provenance_and_no_fake_metadata_score(tmp
                             object_constraints=(ObjectConstraint(("điện thoại",), filter_mode="soft"),),
                             metadata_constraints=MetadataConstraints(title_phrase="Morning"), metadata_mode="soft", clip_candidate_pool=1)
     payload = generator.generate(query, np.array([1,0], dtype=np.float32))
-    assert payload["channel_counts"] == {"clip_frames":1,"object_frames":1,"metadata_videos":1}
+    assert payload["channel_counts"] == {"clip_frames":1,"object_frames":1,"attribute_frames":0,"metadata_videos":1}
     assert {item["video_id"] for item in payload["candidates"]} == {"L21_V001","L21_V002"}
     metadata = next(item for item in payload["candidates"] if "metadata" in item["provenance"])
     assert metadata["metadata_score"] is None

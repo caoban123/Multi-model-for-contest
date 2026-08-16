@@ -23,6 +23,7 @@ from aic_retrieval.metadata_search import load_metadata_documents, results_to_di
 from aic_retrieval.metadata_search import MetadataConstraints
 from aic_retrieval.hybrid_candidates import StructuredCandidateGenerator
 from aic_retrieval.hybrid_ranking import RrfConfig, rank_video_candidates
+from aic_retrieval.color_attributes import ColorAttributeService, parse_color_constraint
 from aic_retrieval.object_search import ObjectSearchService
 from aic_retrieval.object_store import load_alias_dictionary
 from aic_retrieval.structured_query import ObjectConstraint, StructuredQuery
@@ -85,7 +86,8 @@ class RetrievalUiService:
         if config.object_store_path is not None and config.object_store_path.is_file():
             aliases_path = config.object_aliases_path or config.repo_root / "config" / "object_aliases_v1.json"
             self.object_service = ObjectSearchService(config.object_store_path, load_alias_dictionary(aliases_path))
-        self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs)
+        self.attribute_service = ColorAttributeService(config.repo_root, self.refs)
+        self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs, self.attribute_service)
 
     def search(
         self,
@@ -184,10 +186,13 @@ class RetrievalUiService:
         enable_clip: bool = True,
         enable_objects: bool = False,
         enable_metadata: bool = False,
+        enable_attributes: bool = False,
         object_label: str = "",
         object_min_count: int = 1,
         object_position: str = "any",
         object_min_confidence: float = 0.3,
+        attribute_color: str = "",
+        attribute_filter_mode: str = "soft",
         metadata_author: str | None = None,
         metadata_date: str | None = None,
         metadata_title: str | None = None,
@@ -207,9 +212,14 @@ class RetrievalUiService:
         object_constraints = (
             ObjectConstraint((object_label.strip(),), ">=", object_min_count, horizontal, vertical, object_min_confidence, 0.5, object_filter_mode),
         ) if enable_objects else ()
+        attribute_constraint = parse_color_constraint(query, attribute_color, attribute_filter_mode) if enable_attributes else None
+        attribute_constraints = (attribute_constraint,) if attribute_constraint else ()
+        if enable_attributes and not attribute_constraints:
+            raise ValueError("attribute_color is required when attributes are enabled and no color is found in the query")
         structured_query = StructuredQuery(
-            visual_text=query, enable_clip=enable_clip, enable_objects=enable_objects, enable_metadata=enable_metadata,
-            clip_mode="soft" if enable_clip else "disabled", object_constraints=object_constraints,
+            visual_text=query, enable_clip=enable_clip, enable_objects=enable_objects, enable_metadata=enable_metadata, enable_attributes=enable_attributes,
+            clip_mode="soft" if enable_clip else "disabled", object_constraints=object_constraints, attribute_constraints=attribute_constraints,
+            attribute_mode=attribute_filter_mode if enable_attributes else "disabled",
             metadata_constraints=MetadataConstraints(channel=metadata_author or None, publish_date=metadata_date or None, title_phrase=metadata_title or None),
             metadata_mode=metadata_filter_mode if enable_metadata else "disabled", clip_candidate_pool=max(candidate_pool, top_k), fusion_method=fusion_method,
         )
@@ -239,13 +249,14 @@ class RetrievalUiService:
             "structured_query":asdict(structured_query), "candidate_pool":candidate_pool, "top_k":top_k,
             "encode_ms":round(encode_ms,3), "candidate_generation_ms":round(candidate_ms,3), "fusion_ms":round(fusion_ms,3),
             "elapsed_ms":round((time.perf_counter()-started)*1000,3), "channel_counts":candidate_payload["channel_counts"],
-            "unknown_object_frame_count":candidate_payload["unknown_object_frame_count"], **ranked,
+            "unknown_object_frame_count":candidate_payload["unknown_object_frame_count"], "unknown_attribute_frame_count":candidate_payload["unknown_attribute_frame_count"], **ranked,
         }
 
     def structured_evidence(self, result: dict[str, Any], query: StructuredQuery, fusion_config: dict[str, Any]) -> dict[str, Any]:
         ranks = result["modality_ranks"]
         clip_enabled = query.enable_clip and query.clip_mode != "disabled"
         object_enabled = query.enable_objects and any(item.filter_mode != "disabled" for item in query.object_constraints)
+        attribute_enabled = query.enable_attributes and query.attribute_mode != "disabled" and bool(query.attribute_constraints)
         metadata_enabled = query.enable_metadata and query.metadata_mode != "disabled"
         video_frames = self.refs_by_video.get(result["video_id"], [])
         clip_status = "matched" if ranks["clip"] is not None else ("not_matched" if clip_enabled and video_frames else ("unknown" if clip_enabled else "disabled"))
@@ -257,15 +268,19 @@ class RetrievalUiService:
         metadata_known = any(doc.video_id == result["video_id"] for doc in self.metadata_docs)
         metadata_status = "matched" if ranks["metadata"] is not None else ("not_matched" if metadata_enabled and metadata_known else ("unknown" if metadata_enabled else "disabled"))
         object_matches = []
+        attribute_matches = []
         metadata_match = None
         clip_scores = []
         for frame in result["frames"]:
             if frame.get("clip_score") is not None: clip_scores.append(frame["clip_score"])
             object_matches.extend(frame.get("evidence", {}).get("object", []))
+            attribute_matches.extend(frame.get("evidence", {}).get("attribute", []))
             metadata_match = metadata_match or frame.get("evidence", {}).get("metadata")
+        attribute_status = "matched" if ranks["attribute"] is not None else ("not_matched" if attribute_enabled else "disabled")
         return {
             "clip":{"enabled":clip_enabled,"status":clip_status,"rank":ranks["clip"],"score":max(clip_scores) if clip_scores else None},
             "objects":{"enabled":object_enabled,"status":object_status,"rank":ranks["object"],"data_coverage":object_data,"matches":object_matches},
+            "attributes":{"enabled":attribute_enabled,"status":attribute_status,"rank":ranks["attribute"],"matches":attribute_matches},
             "metadata":{"enabled":metadata_enabled,"status":metadata_status,"rank":ranks["metadata"],"level":"video","matched_fields":metadata_match["evidence"] if metadata_match else []},
             "fusion":{"method":"rrf","config":fusion_config}, "representative_rule":result["representative_rule"],
         }
@@ -439,6 +454,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "default_aggregation_method": DEFAULT_AGGREGATION_METHOD,
                         "default_candidate_pool_size": DEFAULT_CANDIDATE_POOL_SIZE,
                         "structured_search_available": service.object_service is not None,
+                        "attribute_search_available": service.attribute_service.available,
                     }
                 )
             elif parsed.path == "/api/search":
@@ -518,9 +534,10 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 payload = service.structured_search(
                     first(params,"q"), top_k=parse_int(first(params,"top_k","12"),12), candidate_pool=parse_int(first(params,"candidate_pool","100"),100),
                     enable_clip=parse_bool(first(params,"enable_clip","true")), enable_objects=parse_bool(first(params,"enable_objects","false")),
-                    enable_metadata=parse_bool(first(params,"enable_metadata","false")), object_label=first(params,"object_label"),
+                    enable_metadata=parse_bool(first(params,"enable_metadata","false")), enable_attributes=parse_bool(first(params,"enable_attributes","false")), object_label=first(params,"object_label"),
                     object_min_count=parse_int(first(params,"object_min_count","1"),1), object_position=first(params,"object_position","any"),
-                    object_min_confidence=parse_float(first(params,"object_min_confidence","0.3"),0.3), metadata_author=first(params,"metadata_author") or None,
+                    object_min_confidence=parse_float(first(params,"object_min_confidence","0.3"),0.3), attribute_color=first(params,"attribute_color"),
+                    attribute_filter_mode=first(params,"attribute_filter_mode","soft"), metadata_author=first(params,"metadata_author") or None,
                     metadata_date=first(params,"metadata_date") or None, metadata_title=first(params,"metadata_title") or None,
                     fusion_method=first(params,"fusion_method","rrf"), object_filter_mode=first(params,"object_filter_mode","soft"),
                     metadata_filter_mode=first(params,"metadata_filter_mode","soft"), matched_frames_per_video=parse_int(first(params,"matched_frames_per_video","5"),5),

@@ -11,12 +11,13 @@ class RrfConfig:
     rrf_k: int = 60
     weight_clip: float = 1.0
     weight_object: float = 0.5
+    weight_attribute: float = 0.35
     weight_metadata: float = 0.3
 
     def __post_init__(self) -> None:
         if self.rrf_k <= 0:
             raise ValueError("rrf_k must be positive")
-        if min(self.weight_clip, self.weight_object, self.weight_metadata) < 0:
+        if min(self.weight_clip, self.weight_object, self.weight_attribute, self.weight_metadata) < 0:
             raise ValueError("RRF weights must not be negative")
 
 
@@ -38,16 +39,25 @@ def frame_fusion_score(item: dict[str, Any], config: RrfConfig) -> float:
     return (
         contribution(item.get("clip_rank"), config.weight_clip, config.rrf_k)
         + contribution(item.get("object_rank"), config.weight_object, config.rrf_k)
+        + contribution(item.get("attribute_rank"), config.weight_attribute, config.rrf_k)
         + contribution(item.get("metadata_rank"), config.weight_metadata, config.rrf_k)
     )
 
 
 def choose_representative(frames: list[dict[str, Any]], query: StructuredQuery, config: RrfConfig) -> tuple[dict[str, Any], str]:
     hard_object = query.enable_objects and any(item.filter_mode == "hard" for item in query.object_constraints)
+    hard_attribute = query.enable_attributes and any(item.filter_mode == "hard" for item in query.attribute_constraints)
     object_active = query.enable_objects and any(item.filter_mode != "disabled" for item in query.object_constraints)
+    attribute_active = query.enable_attributes and query.attribute_mode != "disabled" and bool(query.attribute_constraints)
     metadata_active = query.enable_metadata and query.metadata_mode != "disabled"
     clip_active = query.enable_clip and query.clip_mode != "disabled"
-    if hard_object:
+    if hard_attribute:
+        satisfying = [item for item in frames if item.get("attribute_rank") is not None]
+        with_clip = [item for item in satisfying if item.get("clip_score") is not None]
+        pool = with_clip or satisfying
+        rule = "highest_clip_among_hard_attribute_matches" if with_clip else "strongest_attribute_among_hard_matches"
+        key = lambda item: (-(item.get("clip_score") if with_clip else item.get("attribute_score") or 0), item.get("attribute_rank") or 10**9, item.get("clip_rank") or 10**9, item["keyframe_id"])
+    elif hard_object:
         satisfying = [item for item in frames if item.get("object_rank") is not None]
         with_clip = [item for item in satisfying if item.get("clip_score") is not None]
         pool = with_clip or satisfying
@@ -56,15 +66,18 @@ def choose_representative(frames: list[dict[str, Any]], query: StructuredQuery, 
     elif clip_active and not object_active and not metadata_active:
         pool, rule = frames, "highest_clip_score_visual_only"
         key = lambda item: (-(item.get("clip_score") if item.get("clip_score") is not None else float("-inf")), item.get("clip_rank") or 10**9, item["keyframe_id"])
-    elif object_active and not clip_active and not metadata_active:
+    elif object_active and not clip_active and not attribute_active and not metadata_active:
         pool, rule = frames, "strongest_object_evidence_object_only"
         key = lambda item: (-(item.get("object_score") or 0), item.get("object_rank") or 10**9, item["keyframe_id"])
-    elif metadata_active and not clip_active and not object_active:
+    elif attribute_active and not clip_active and not object_active and not metadata_active:
+        pool, rule = frames, "strongest_attribute_evidence_attribute_only"
+        key = lambda item: (-(item.get("attribute_score") or 0), item.get("attribute_rank") or 10**9, item["keyframe_id"])
+    elif metadata_active and not clip_active and not object_active and not attribute_active:
         pool, rule = frames, "highest_clip_within_metadata_video"
         key = lambda item: (-(item.get("clip_score") if item.get("clip_score") is not None else float("-inf")), item["keyframe_id"])
     else:
         pool, rule = frames, "highest_frame_level_rrf_hybrid"
-        key = lambda item: (-frame_fusion_score(item, config), item.get("clip_rank") or 10**9, item.get("object_rank") or 10**9, item.get("metadata_rank") or 10**9, item["keyframe_id"])
+        key = lambda item: (-frame_fusion_score(item, config), item.get("clip_rank") or 10**9, item.get("object_rank") or 10**9, item.get("attribute_rank") or 10**9, item.get("metadata_rank") or 10**9, item["keyframe_id"])
     if not pool:
         raise ValueError("cannot choose representative without a real frame candidate")
     return sorted(pool, key=key)[0], rule
@@ -76,6 +89,7 @@ def rank_video_candidates(candidate_payload: dict[str, Any], query: StructuredQu
     candidates = candidate_payload["candidates"]
     clip_ranks = modality_video_ranks(candidates, "clip_rank")
     object_ranks = modality_video_ranks(candidates, "object_rank")
+    attribute_ranks = modality_video_ranks(candidates, "attribute_rank")
     metadata_ranks = modality_video_ranks(candidates, "metadata_rank")
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in candidates:
@@ -83,10 +97,10 @@ def rank_video_candidates(candidate_payload: dict[str, Any], query: StructuredQu
             grouped.setdefault(item["video_id"], []).append(item)
     unranked = []
     for video_id, frames in grouped.items():
-        ranks = {"clip": clip_ranks.get(video_id), "object": object_ranks.get(video_id), "metadata": metadata_ranks.get(video_id)}
-        score = contribution(ranks["clip"], config.weight_clip, config.rrf_k) + contribution(ranks["object"], config.weight_object, config.rrf_k) + contribution(ranks["metadata"], config.weight_metadata, config.rrf_k)
+        ranks = {"clip": clip_ranks.get(video_id), "object": object_ranks.get(video_id), "attribute": attribute_ranks.get(video_id), "metadata": metadata_ranks.get(video_id)}
+        score = contribution(ranks["clip"], config.weight_clip, config.rrf_k) + contribution(ranks["object"], config.weight_object, config.rrf_k) + contribution(ranks["attribute"], config.weight_attribute, config.rrf_k) + contribution(ranks["metadata"], config.weight_metadata, config.rrf_k)
         representative, rule = choose_representative(frames, query, config)
-        ordered_frames = sorted(frames, key=lambda item: (-frame_fusion_score(item, config), item.get("clip_rank") or 10**9, item.get("object_rank") or 10**9, item.get("metadata_rank") or 10**9, item["keyframe_id"]))
+        ordered_frames = sorted(frames, key=lambda item: (-frame_fusion_score(item, config), item.get("clip_rank") or 10**9, item.get("object_rank") or 10**9, item.get("attribute_rank") or 10**9, item.get("metadata_rank") or 10**9, item["keyframe_id"]))
         selected_frames = [representative, *(item for item in ordered_frames if item is not representative)][:matched_frames_per_video]
         frame_payloads = []
         for frame_rank, frame in enumerate(selected_frames, start=1):
@@ -98,10 +112,10 @@ def rank_video_candidates(candidate_payload: dict[str, Any], query: StructuredQu
             "frame_count": len(frames), "matched_frame_count": len(frame_payloads), "aggregation_method": "rrf",
             "modality_ranks": ranks, "representative_rule": rule, "frames": frame_payloads,
         })
-    unranked.sort(key=lambda item: (-item["fusion_score"], item["modality_ranks"]["clip"] or 10**9, item["modality_ranks"]["object"] or 10**9, item["modality_ranks"]["metadata"] or 10**9, item["video_id"]))
+    unranked.sort(key=lambda item: (-item["fusion_score"], item["modality_ranks"]["clip"] or 10**9, item["modality_ranks"]["object"] or 10**9, item["modality_ranks"]["attribute"] or 10**9, item["modality_ranks"]["metadata"] or 10**9, item["video_id"]))
     results = []
     for rank, item in enumerate(unranked[:top_k], start=1): results.append({"rank": rank, **item})
-    ordered_raw = sorted(candidates, key=lambda item: (-frame_fusion_score(item, config), item.get("clip_rank") or 10**9, item.get("object_rank") or 10**9, item.get("metadata_rank") or 10**9, item["video_id"], item["keyframe_id"] if item["keyframe_id"] is not None else 10**9))
+    ordered_raw = sorted(candidates, key=lambda item: (-frame_fusion_score(item, config), item.get("clip_rank") or 10**9, item.get("object_rank") or 10**9, item.get("attribute_rank") or 10**9, item.get("metadata_rank") or 10**9, item["video_id"], item["keyframe_id"] if item["keyframe_id"] is not None else 10**9))
     raw_results = [{**item, "rank": rank, "score": frame_fusion_score(item, config), "frame_fusion_score": frame_fusion_score(item, config)} for rank, item in enumerate(ordered_raw, start=1) if item["keyframe_id"] is not None]
     representative_results = []
     for item in results:

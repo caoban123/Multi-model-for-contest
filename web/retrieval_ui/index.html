@@ -84,6 +84,7 @@
               <div class="modality-switches" aria-label="Structured retrieval modalities">
                 <label class="check-field"><input id="enable-clip" type="checkbox" checked> CLIP</label>
                 <label class="check-field"><input id="enable-objects" type="checkbox"> Objects</label>
+                <label class="check-field"><input id="enable-attributes" type="checkbox"> Attributes</label>
                 <label class="check-field"><input id="enable-metadata" type="checkbox"> Metadata</label>
               </div>
               <div class="structured-groups">
@@ -94,6 +95,11 @@
                   <label><span>Position</span><select id="object-position"><option>any</option><option>left</option><option>center</option><option>right</option><option>top</option><option>middle</option><option>bottom</option></select></label>
                   <label><span>Minimum confidence</span><input id="object-min-confidence" type="number" min="0" max="1" step="0.1" value="0.3"></label>
                   <label><span>Constraint mode</span><select id="object-filter-mode"><option value="soft">Soft support</option><option value="hard">Hard requirement</option></select></label>
+                </fieldset>
+                <fieldset id="attribute-fields" disabled>
+                  <legend>Attribute evidence</legend>
+                  <label><span>Color</span><input id="attribute-color" type="text" placeholder="auto from query / red"></label>
+                  <label><span>Constraint mode</span><select id="attribute-filter-mode"><option value="soft">Soft support</option><option value="hard">Hard requirement</option></select></label>
                 </fieldset>
                 <fieldset id="metadata-fields" disabled>
                   <legend>Metadata evidence · video level</legend>

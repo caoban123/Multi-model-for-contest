@@ -26,7 +26,7 @@ Trạng thái hiện tại: **Phase 4 đã có structured/hybrid retrieval ở d
 - Metadata lexical search độc lập ở cấp video, chỉ dùng cho thí nghiệm.
 - Local retrieval UI với Video Ranking mặc định, Frame Ranking debug, matched-frame expansion và keyframe-neighborhood timeline.
 - Max-score aggregation ở cấp video và benchmark diversity trước/sau.
-- Structured retrieval experimental qua endpoint riêng `/api/structured-search`, có thể dùng CLIP, metadata và object evidence khi SQLite object store local đã được build.
+- Structured retrieval experimental qua endpoint riêng `/api/structured-search`, có thể dùng CLIP, metadata, object evidence và attribute/color evidence opt-in.
 
 Chưa có:
 
@@ -73,7 +73,7 @@ Các con số trên là coverage tham chiếu của bộ data chuẩn, không ph
 - **L21** là baseline KIS và scope benchmark hiện tại. CLIP feature + mapping là bắt buộc; ảnh keyframe có thể chỉ là một tập cục bộ không đầy đủ.
 - **L22-L30** thuộc scope `registry/mapping/metadata/index-capable` của Phase 1. Chúng không được coi là visual retrieval đã xác minh nếu máy local không có ảnh keyframe tương ứng.
 - Baseline là **CLIP ViT-B/32 + NumPy cosine search**. FAISS là tùy chọn, không phải dependency bắt buộc.
-- Metadata là kênh retrieval độc lập mang tính thử nghiệm. Object fusion cũng là thử nghiệm và bị tắt mặc định vì đã regression trên pool50.
+- Metadata là kênh retrieval độc lập mang tính thử nghiệm. Object/attribute fusion cũng là thử nghiệm và bị tắt mặc định cho đường search chính.
 
 ## Setup Tối Thiểu
 
@@ -390,7 +390,15 @@ Ví dụ endpoint opt-in:
 /api/structured-search?q=a+person+holding+a+phone&top_k=12&candidate_pool=100&enable_clip=true&enable_objects=true&object_label=phone&object_min_count=1&object_position=any&object_min_confidence=0.3&enable_metadata=false&fusion_method=rrf
 ```
 
-Evidence phân biệt `matched`, `not_matched`, `unknown` và `disabled`. `unknown` nghĩa là thiếu object data, không phải “không phát hiện object”. Metadata luôn là evidence cấp video; representative frame phải đến từ CLIP/object evidence thật.
+Attribute/color evidence có thể bật bằng UI `Attributes` hoặc API:
+
+```text
+/api/structured-search?q=person+wearing+a+red+shirt&top_k=12&candidate_pool=100&enable_clip=true&enable_attributes=true&attribute_filter_mode=soft&fusion_method=rrf
+```
+
+Nếu `attribute_color` để trống, backend cố gắng parse màu từ query như `red`, `blue`, `white`, `black` hoặc tiếng Việt tương ứng. Đây là color evidence nhẹ trên keyframe image, hữu ích để giảm nhiễu cho query màu sắc như áo đỏ, nhưng chưa phải detector trang phục/person-crop chuẩn.
+
+Evidence phân biệt `matched`, `not_matched`, `unknown` và `disabled`. `unknown` nghĩa là thiếu object/attribute data, không phải “không phát hiện object”. Metadata luôn là evidence cấp video; representative frame phải đến từ CLIP/object/attribute evidence thật.
 
 Chạy baseline và ablation:
 
@@ -399,6 +407,6 @@ python tools\phase4_baseline.py --clip-cache-dir artifacts\models --clip-local-f
 python tools\phase4_benchmark.py --clip-cache-dir artifacts\models --clip-local-files-only
 ```
 
-Output được tạo dưới `artifacts/benchmarks/phase4/` và không commit. `ablation_v1_review.csv` có cột chấm tay và evidence CLIP/object/metadata/RRF. Khi chưa có manual ground truth, Recall/MRR/NDCG được ghi `null/unavailable`; không được diễn giải là 0.
+Output được tạo dưới `artifacts/benchmarks/phase4/` và không commit. `ablation_v1_review.csv` có cột chấm tay và evidence CLIP/object/metadata/RRF; UI export mới có thêm attribute fields khi bật Attributes. Khi chưa có manual ground truth, Recall/MRR/NDCG được ghi `null/unavailable`; không được diễn giải là 0.
 
 Quyết định P4.10: **HYBRID OPT-IN**. Implementation, API, UI và ablation pipeline đã hoàn thành; quality verification/default promotion vẫn chờ manual judgement. Không đổi framework, model, vector database, OCR/ASR hoặc detector.
