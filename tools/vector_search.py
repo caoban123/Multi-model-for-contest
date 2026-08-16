@@ -14,9 +14,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from aic_retrieval.search import (
+    aggregate_results_by_video,
     build_numpy_index,
     diversify_results_by_video,
-    group_results_by_video,
     load_numpy_index,
     load_query_vector_from_asset,
     load_query_vector,
@@ -56,6 +56,9 @@ def main() -> int:
         help="Raw candidate pool size before grouping/diversity. Defaults to top-k.",
     )
     parser.add_argument("--max-frames-per-video", type=int, default=1)
+    parser.add_argument("--matched-frames-per-video", type=int, default=5)
+    parser.add_argument("--aggregation-method", choices=["max", "mean_top_n"], default="max")
+    parser.add_argument("--mean-top-n", type=int, default=3)
     parser.add_argument("--group-by-video", action="store_true")
     parser.add_argument("--require-keyframes", action="store_true")
     parser.add_argument(
@@ -121,11 +124,29 @@ def main() -> int:
         raise ValueError("provide --query-vector, --query-text, or both --query-from-video-id and --query-keyframe-id")
 
     candidate_pool = args.candidate_pool or args.top_k
+    for name, value in (
+        ("top-k", args.top_k),
+        ("candidate-pool", candidate_pool),
+        ("max-frames-per-video", args.max_frames_per_video),
+        ("matched-frames-per-video", args.matched_frames_per_video),
+        ("mean-top-n", args.mean_top_n),
+    ):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
     if candidate_pool < args.top_k:
         candidate_pool = args.top_k
+    retrieval_start = time.perf_counter()
     raw_results = search_numpy_index(index, refs, query, top_k=candidate_pool)
+    retrieval_ms = (time.perf_counter() - retrieval_start) * 1000
+    aggregation_start = time.perf_counter()
     diversified_results = diversify_results_by_video(raw_results, args.max_frames_per_video)[: args.top_k]
-    video_groups = group_results_by_video(raw_results, args.max_frames_per_video)[: args.top_k]
+    video_results = aggregate_results_by_video(
+        raw_results,
+        max_frames_per_video=args.matched_frames_per_video,
+        aggregation_method=args.aggregation_method,
+        mean_top_n=args.mean_top_n,
+    )[: args.top_k]
+    aggregation_ms = (time.perf_counter() - aggregation_start) * 1000
     search_ms = (time.perf_counter() - search_start) * 1000
     elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -134,6 +155,9 @@ def main() -> int:
         "top_k": args.top_k,
         "candidate_pool": candidate_pool,
         "max_frames_per_video": args.max_frames_per_video,
+        "matched_frames_per_video": args.matched_frames_per_video,
+        "aggregation_method": args.aggregation_method,
+        "mean_top_n": args.mean_top_n,
         "group_by_video": args.group_by_video,
         "index_source": index_source,
         "index_metadata": index_metadata,
@@ -142,10 +166,13 @@ def main() -> int:
         "query_source": query_source,
         "index_ready_ms": index_ready_ms,
         "search_ms": search_ms,
+        "retrieval_ms": retrieval_ms,
+        "aggregation_ms": aggregation_ms,
         "elapsed_ms": elapsed_ms,
         "raw_results": [asdict(result) for result in raw_results],
         "results": [asdict(result) for result in diversified_results],
-        "video_groups": [asdict(result) for result in video_groups] if args.group_by_video else [],
+        "video_results": [asdict(result) for result in video_results],
+        "video_groups": [asdict(result) for result in video_results] if args.group_by_video else [],
     }
 
     print(json.dumps(payload, ensure_ascii=False, indent=2))

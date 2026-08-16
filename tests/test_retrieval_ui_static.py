@@ -14,7 +14,11 @@ def test_retrieval_ui_contains_review_controls() -> None:
     assert 'id="history-list"' in html
     assert 'id="visual-mode-button"' in html
     assert 'id="metadata-mode-button"' in html
+    assert 'id="video-ranking-button"' in html
+    assert 'id="frame-ranking-button"' in html
     assert 'class="pin-button secondary-button"' in html
+    assert 'class="explore-button secondary-button"' in html
+    assert 'class="explore-panel"' in html
     assert 'class="neighborhood-button secondary-button"' in html
     assert 'class="neighborhood-panel"' in html
     assert 'data-judgement="good"' in html
@@ -66,3 +70,26 @@ def test_retrieval_ui_has_keyframe_neighborhood_viewer() -> None:
     assert "toggleNeighborhood" in script
     assert "renderNeighborhood" in script
     assert "neighborhood-button" in script
+
+
+def test_retrieval_ui_defaults_to_video_ranking_and_keeps_frame_debug_mode() -> None:
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+
+    assert 'activeRankingMode = "video"' in script
+    assert "payload.video_results" in script
+    assert "payload.raw_results" in script
+    assert 'setRankingMode("frame")' in script
+
+
+def test_retrieval_ui_explores_matched_frames_and_reuses_neighborhood_api() -> None:
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+
+    assert "toggleExplore" in script
+    assert "matchedFrameNode" in script
+    assert "loadMatchedFrameTimeline" in script
+    assert "Timeline neighbors" in script
+    assert script.count("/api/neighborhood") >= 2
+
+    styles = (ROOT / "web" / "retrieval_ui" / "styles.css").read_text(encoding="utf-8")
+    assert ".explore-panel[hidden]" in styles
+    assert ".neighborhood-panel[hidden]" in styles

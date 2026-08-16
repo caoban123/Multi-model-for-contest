@@ -12,8 +12,8 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from aic_retrieval.search import (
+    aggregate_results_by_video,
     diversify_results_by_video,
-    group_results_by_video,
     load_numpy_index,
     load_registry,
     search_numpy_index,
@@ -22,6 +22,15 @@ from aic_retrieval.search import (
 from aic_retrieval.metadata_search import load_metadata_documents, results_to_dict, search_metadata
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
 from aic_retrieval.translation import ExternalTranslator, TranslationConfig
+
+
+DEFAULT_TOP_K_VIDEOS = 12
+DEFAULT_CANDIDATE_POOL_SIZE = 40
+DEFAULT_MAX_FRAMES_PER_VIDEO = 1
+DEFAULT_MATCHED_FRAMES_PER_VIDEO = 5
+DEFAULT_NEIGHBOR_RADIUS = 3
+DEFAULT_AGGREGATION_METHOD = "max"
+DEFAULT_MEAN_TOP_N = 3
 
 
 @dataclass(frozen=True)
@@ -60,24 +69,51 @@ class RetrievalUiService:
         for ref in self.refs:
             self.refs_by_video.setdefault(ref.video_id, []).append(ref)
         for video_refs in self.refs_by_video.values():
-            video_refs.sort(key=lambda ref: ref.keyframe_id)
+            video_refs.sort(key=lambda ref: (ref.pts_time, ref.keyframe_id))
         self.metadata_by_video: dict[str, dict[str, Any]] = {}
         self.encoder: ClipTextEncoder | None = None
         self.translator = ExternalTranslator(config.translation or TranslationConfig())
 
-    def search(self, query: str, top_k: int = 12, candidate_pool: int | None = None, max_frames_per_video: int = 1) -> dict[str, Any]:
+    def search(
+        self,
+        query: str,
+        top_k: int = DEFAULT_TOP_K_VIDEOS,
+        candidate_pool: int | None = None,
+        max_frames_per_video: int = DEFAULT_MAX_FRAMES_PER_VIDEO,
+        matched_frames_per_video: int = DEFAULT_MATCHED_FRAMES_PER_VIDEO,
+        aggregation_method: str = DEFAULT_AGGREGATION_METHOD,
+        mean_top_n: int = DEFAULT_MEAN_TOP_N,
+    ) -> dict[str, Any]:
         query = query.strip()
         if not query:
             raise ValueError("query must not be empty")
-        top_k = max(1, min(top_k, 50))
-        candidate_pool = max(candidate_pool or top_k, top_k)
-        max_frames_per_video = max(1, min(max_frames_per_video, 10))
+        _require_positive("top_k", top_k)
+        candidate_pool = candidate_pool if candidate_pool is not None else DEFAULT_CANDIDATE_POOL_SIZE
+        _require_positive("candidate_pool", candidate_pool)
+        _require_positive("max_frames_per_video", max_frames_per_video)
+        _require_positive("matched_frames_per_video", matched_frames_per_video)
+        _require_positive("mean_top_n", mean_top_n)
+        top_k = min(top_k, 50)
+        candidate_pool = max(candidate_pool, top_k)
+        max_frames_per_video = min(max_frames_per_video, 10)
+        matched_frames_per_video = min(matched_frames_per_video, 50)
 
         started = time.perf_counter()
+        encode_started = time.perf_counter()
         query_vector = self._encoder().encode_text(query)
+        encode_ms = (time.perf_counter() - encode_started) * 1000
+        retrieval_started = time.perf_counter()
         raw_results = search_numpy_index(self.index, self.refs, query_vector, top_k=candidate_pool)
+        retrieval_ms = (time.perf_counter() - retrieval_started) * 1000
+        aggregation_started = time.perf_counter()
         results = diversify_results_by_video(raw_results, max_frames_per_video=max_frames_per_video)[:top_k]
-        video_groups = group_results_by_video(raw_results, max_frames_per_video=max_frames_per_video)[:top_k]
+        video_results = aggregate_results_by_video(
+            raw_results,
+            max_frames_per_video=matched_frames_per_video,
+            aggregation_method=aggregation_method,
+            mean_top_n=mean_top_n,
+        )[:top_k]
+        aggregation_ms = (time.perf_counter() - aggregation_started) * 1000
         elapsed_ms = (time.perf_counter() - started) * 1000
 
         return {
@@ -85,13 +121,23 @@ class RetrievalUiService:
             "query": query,
             "groups": sorted(self.config.groups),
             "top_k": top_k,
+            "top_k_videos": top_k,
             "candidate_pool": candidate_pool,
+            "candidate_pool_size": candidate_pool,
             "max_frames_per_video": max_frames_per_video,
+            "matched_frames_per_video": matched_frames_per_video,
+            "aggregation_method": aggregation_method,
+            "mean_top_n": mean_top_n,
+            "encode_ms": round(encode_ms, 3),
+            "retrieval_ms": round(retrieval_ms, 3),
+            "aggregation_ms": round(aggregation_ms, 3),
             "elapsed_ms": round(elapsed_ms, 3),
             "index_vectors": int(self.index.shape[0]),
             "index_dim": int(self.index.shape[1]),
+            "raw_results": [self.enrich_result(asdict(result)) for result in raw_results],
             "results": [self.enrich_result(asdict(result)) for result in results],
-            "video_groups": [asdict(group) for group in video_groups],
+            "video_results": [self.enrich_video_result(asdict(result)) for result in video_results],
+            "video_groups": [self.enrich_video_result(asdict(result)) for result in video_results],
         }
 
     def metadata_search(self, query: str, top_k: int = 12, min_match: int = 1) -> dict[str, Any]:
@@ -118,7 +164,8 @@ class RetrievalUiService:
         video_id = video_id.strip()
         if not video_id:
             raise ValueError("video_id must not be empty")
-        radius = max(1, min(radius, 12))
+        _require_positive("radius", radius)
+        radius = min(radius, 12)
         refs = self.refs_by_video.get(video_id)
         if not refs:
             raise ValueError(f"video_id not found in index: {video_id}")
@@ -144,6 +191,7 @@ class RetrievalUiService:
             "video_id": video_id,
             "keyframe_id": keyframe_id,
             "radius": radius,
+            "ordering": "pts_time_ascending",
             "total_frames": len(refs),
             "start_keyframe_id": frames[0]["keyframe_id"] if frames else None,
             "end_keyframe_id": frames[-1]["keyframe_id"] if frames else None,
@@ -174,6 +222,25 @@ class RetrievalUiService:
             "watch_url": metadata.get("watch_url", ""),
             "keywords": (metadata.get("keywords") or [])[:8],
         }
+        return result
+
+    def enrich_video_result(self, result: dict[str, Any]) -> dict[str, Any]:
+        video_id = result["video_id"]
+        keyframe_path = result.get("best_keyframe_path")
+        result["image_url"] = f"/keyframe?path={keyframe_path}" if keyframe_path else None
+        result["metadata"] = self.enrich_result(
+            {
+                "video_id": video_id,
+                "keyframe_path": keyframe_path,
+            }
+        )["metadata"]
+        for frame in result.get("frames", []):
+            frame_path = frame.get("keyframe_path")
+            frame["image_url"] = f"/keyframe?path={frame_path}" if frame_path else None
+            frame["is_representative"] = (
+                frame.get("keyframe_id") == result.get("best_keyframe_id")
+                and frame.get("frame_idx") == result.get("best_frame_idx")
+            )
         return result
 
     def video_metadata(self, video_id: str) -> dict[str, Any]:
@@ -235,6 +302,9 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "translation_configured": service.translator.is_configured,
                         "translation_provider": service.translator.config.provider,
                         "translation_model": service.translator.config.model,
+                        "default_ranking_mode": "video",
+                        "default_aggregation_method": DEFAULT_AGGREGATION_METHOD,
+                        "default_candidate_pool_size": DEFAULT_CANDIDATE_POOL_SIZE,
                     }
                 )
             elif parsed.path == "/api/search":
@@ -258,9 +328,33 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             try:
                 payload = service.search(
                     first(params, "q"),
-                    top_k=parse_int(first(params, "top_k", "12"), 12),
-                    candidate_pool=parse_int(first(params, "candidate_pool", "30"), 30),
-                    max_frames_per_video=parse_int(first(params, "max_frames_per_video", "1"), 1),
+                    top_k=parse_int(
+                        first(params, "top_k", str(DEFAULT_TOP_K_VIDEOS)),
+                        DEFAULT_TOP_K_VIDEOS,
+                    ),
+                    candidate_pool=parse_int(
+                        first(params, "candidate_pool", str(DEFAULT_CANDIDATE_POOL_SIZE)),
+                        DEFAULT_CANDIDATE_POOL_SIZE,
+                    ),
+                    max_frames_per_video=parse_int(
+                        first(params, "max_frames_per_video", str(DEFAULT_MAX_FRAMES_PER_VIDEO)),
+                        DEFAULT_MAX_FRAMES_PER_VIDEO,
+                    ),
+                    matched_frames_per_video=parse_int(
+                        first(
+                            params,
+                            "matched_frames_per_video",
+                            str(DEFAULT_MATCHED_FRAMES_PER_VIDEO),
+                        ),
+                        DEFAULT_MATCHED_FRAMES_PER_VIDEO,
+                    ),
+                    aggregation_method=first(
+                        params, "aggregation_method", DEFAULT_AGGREGATION_METHOD
+                    ),
+                    mean_top_n=parse_int(
+                        first(params, "mean_top_n", str(DEFAULT_MEAN_TOP_N)),
+                        DEFAULT_MEAN_TOP_N,
+                    ),
                 )
             except Exception as exc:  # UI boundary: return a readable error to the browser.
                 self._error(HTTPStatus.BAD_REQUEST, str(exc))
@@ -368,3 +462,8 @@ def parse_int(value: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def _require_positive(name: str, value: int) -> None:
+    if value <= 0:
+        raise ValueError(f"{name} must be positive")

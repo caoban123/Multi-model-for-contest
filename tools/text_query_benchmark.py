@@ -18,9 +18,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from aic_retrieval.search import (
+    aggregate_results_by_video,
     build_numpy_index,
     diversify_results_by_video,
-    group_results_by_video,
     load_numpy_index,
     load_registry,
     search_numpy_index,
@@ -41,6 +41,9 @@ def main() -> int:
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--candidate-pool", type=int, default=25)
     parser.add_argument("--max-frames-per-video", type=int, default=1)
+    parser.add_argument("--matched-frames-per-video", type=int, default=5)
+    parser.add_argument("--aggregation-method", choices=["max", "mean_top_n"], default="max")
+    parser.add_argument("--mean-top-n", type=int, default=3)
     parser.add_argument("--clip-model-id", default=os.environ.get("AIC_CLIP_MODEL_ID", DEFAULT_CLIP_MODEL_ID))
     parser.add_argument("--clip-cache-dir", default=os.environ.get("AIC_CLIP_CACHE_DIR"))
     parser.add_argument("--clip-local-files-only", action="store_true")
@@ -89,16 +92,38 @@ def main() -> int:
     encode_ms = (time.perf_counter() - encoder_start) * 1000
 
     candidate_pool = max(args.candidate_pool, args.top_k)
+    for name, value in (
+        ("top-k", args.top_k),
+        ("candidate-pool", args.candidate_pool),
+        ("max-frames-per-video", args.max_frames_per_video),
+        ("matched-frames-per-video", args.matched_frames_per_video),
+        ("mean-top-n", args.mean_top_n),
+    ):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive")
     query_results = []
     rows = []
     search_total_ms = 0.0
+    retrieval_total_ms = 0.0
+    aggregation_total_ms = 0.0
     for query, query_vector in zip(queries, query_vectors):
         search_start = time.perf_counter()
+        retrieval_start = time.perf_counter()
         raw_results = search_numpy_index(index, refs, query_vector, top_k=candidate_pool)
+        retrieval_ms = (time.perf_counter() - retrieval_start) * 1000
+        aggregation_start = time.perf_counter()
         results = diversify_results_by_video(raw_results, args.max_frames_per_video)[: args.top_k]
-        video_groups = group_results_by_video(raw_results, args.max_frames_per_video)[: args.top_k]
+        video_results = aggregate_results_by_video(
+            raw_results,
+            max_frames_per_video=args.matched_frames_per_video,
+            aggregation_method=args.aggregation_method,
+            mean_top_n=args.mean_top_n,
+        )[: args.top_k]
+        aggregation_ms = (time.perf_counter() - aggregation_start) * 1000
         search_ms = (time.perf_counter() - search_start) * 1000
         search_total_ms += search_ms
+        retrieval_total_ms += retrieval_ms
+        aggregation_total_ms += aggregation_ms
 
         query_payload = {
             "id": query["id"],
@@ -107,9 +132,12 @@ def main() -> int:
             "query_type": query.get("query_type", "unknown"),
             "language": query.get("language", "unknown"),
             "search_ms": search_ms,
+            "retrieval_ms": retrieval_ms,
+            "aggregation_ms": aggregation_ms,
             "raw_results": [asdict(result) for result in raw_results],
             "results": [asdict(result) for result in results],
-            "video_groups": [asdict(result) for result in video_groups],
+            "video_results": [asdict(result) for result in video_results],
+            "video_groups": [asdict(result) for result in video_results],
         }
         query_results.append(query_payload)
         csv_results = raw_results if args.csv_result_set == "raw_results" else results
@@ -132,7 +160,7 @@ def main() -> int:
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     payload = {
-        "benchmark_version": "2.0",
+        "benchmark_version": "3.0",
         "benchmark_kind": "MANUAL_RELEVANCE_BENCHMARK — not an official AIC score",
         "query_set_fingerprint": sha256_file(Path(args.queries)),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -144,6 +172,9 @@ def main() -> int:
         "candidate_pool": candidate_pool,
         "csv_result_set": args.csv_result_set,
         "max_frames_per_video": args.max_frames_per_video,
+        "matched_frames_per_video": args.matched_frames_per_video,
+        "aggregation_method": args.aggregation_method,
+        "mean_top_n": args.mean_top_n,
         "index_source": index_source,
         "index_metadata": index_metadata,
         "index_vectors": int(index.shape[0]),
@@ -154,7 +185,11 @@ def main() -> int:
         "index_ready_ms": index_ready_ms,
         "encode_ms": encode_ms,
         "search_total_ms": search_total_ms,
+        "retrieval_total_ms": retrieval_total_ms,
+        "aggregation_total_ms": aggregation_total_ms,
         "search_latency_ms": latency_summary([item["search_ms"] for item in query_results]),
+        "retrieval_latency_ms": latency_summary([item["retrieval_ms"] for item in query_results]),
+        "aggregation_latency_ms": latency_summary([item["aggregation_ms"] for item in query_results]),
         "elapsed_ms": elapsed_ms,
         "queries": query_results,
     }
@@ -169,6 +204,8 @@ def main() -> int:
         "index_dim": int(index.shape[1]),
         "encode_ms": encode_ms,
         "search_total_ms": search_total_ms,
+        "retrieval_total_ms": retrieval_total_ms,
+        "aggregation_total_ms": aggregation_total_ms,
         "elapsed_ms": elapsed_ms,
         "top1": [
             {

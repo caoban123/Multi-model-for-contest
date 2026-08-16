@@ -61,6 +61,15 @@ body {
   background: #f8faf7;
 }
 
+.ranking-tabs {
+  grid-template-columns: 1fr 1fr;
+  margin-left: 6px;
+}
+
+.ranking-tabs .mode-button {
+  min-width: 106px;
+}
+
 .mode-button {
   height: 32px;
   min-width: 82px;
@@ -297,6 +306,12 @@ button:disabled {
   white-space: nowrap;
 }
 
+.score-wrap {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .title {
   min-height: 38px;
   margin: 8px 0 10px;
@@ -365,6 +380,107 @@ dd {
 
 .neighborhood-button[hidden] {
   display: none;
+}
+
+.explore-button[hidden],
+.matched-fact[hidden],
+.ranking-tabs[hidden] {
+  display: none;
+}
+
+.explore-panel[hidden],
+.neighborhood-panel[hidden] {
+  display: none;
+}
+
+.explore-panel {
+  display: grid;
+  gap: 10px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8faf7;
+}
+
+.explore-heading {
+  margin: 0;
+  font-size: 13px;
+}
+
+.explore-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.matched-frame-list {
+  display: grid;
+  gap: 7px;
+}
+
+.matched-frame {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+}
+
+.matched-frame.is-representative {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.matched-frame-thumb {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 5px;
+  background: #e9ece8;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.matched-frame-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.matched-frame-meta {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.matched-frame-meta strong {
+  display: block;
+  color: var(--ink);
+}
+
+.timeline-button {
+  width: auto;
+  height: 32px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.timeline-panel {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.timeline-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .neighborhood-panel {
@@ -484,5 +600,17 @@ dd {
   .workspace {
     grid-template-columns: 1fr;
     padding: 14px 14px 24px;
+  }
+
+  .ranking-tabs {
+    margin-left: 0;
+  }
+
+  .matched-frame {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .timeline-button {
+    grid-column: 1 / -1;
   }
 }

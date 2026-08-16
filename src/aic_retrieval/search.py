@@ -44,15 +44,19 @@ class SearchResult:
 
 
 @dataclass(frozen=True)
-class VideoGroupResult:
+class VideoResult:
     rank: int
     video_id: str
     group: str
+    video_score: float
     best_score: float
     best_keyframe_id: int
     best_frame_idx: int
     best_pts_time: float
+    best_keyframe_path: str | None
     frame_count: int
+    matched_frame_count: int
+    aggregation_method: str
     frames: list[SearchResult]
 
 
@@ -221,8 +225,18 @@ def search_numpy_index(index: np.ndarray, refs: list[FrameRef], query: np.ndarra
     if top_k <= 0:
         return []
 
-    candidate_indices = np.argpartition(-scores, top_k - 1)[:top_k]
-    ranked_indices = candidate_indices[np.argsort(-scores[candidate_indices])]
+    if top_k == len(scores):
+        candidate_indices = np.arange(len(scores))
+    else:
+        cutoff = float(np.partition(scores, len(scores) - top_k)[len(scores) - top_k])
+        above_cutoff = np.flatnonzero(scores > cutoff)
+        cutoff_ties = np.flatnonzero(scores == cutoff)
+        candidate_indices = np.concatenate(
+            [above_cutoff, cutoff_ties[: top_k - len(above_cutoff)]]
+        )
+    ranked_indices = candidate_indices[
+        np.lexsort((candidate_indices, -scores[candidate_indices]))
+    ]
 
     results: list[SearchResult] = []
     for rank, idx in enumerate(ranked_indices, start=1):
@@ -258,39 +272,83 @@ def diversify_results_by_video(results: list[SearchResult], max_frames_per_video
     return diversified
 
 
-def group_results_by_video(results: list[SearchResult], max_frames_per_video: int) -> list[VideoGroupResult]:
+def aggregate_results_by_video(
+    results: list[SearchResult],
+    max_frames_per_video: int,
+    aggregation_method: str = "max",
+    mean_top_n: int = 3,
+) -> list[VideoResult]:
     if max_frames_per_video <= 0:
         raise ValueError("max_frames_per_video must be positive")
+    if mean_top_n <= 0:
+        raise ValueError("mean_top_n must be positive")
+    if aggregation_method not in {"max", "mean_top_n"}:
+        raise ValueError(f"unsupported aggregation method: {aggregation_method}")
 
     grouped: dict[str, list[SearchResult]] = {}
-    order: list[str] = []
     for result in results:
         if result.video_id not in grouped:
             grouped[result.video_id] = []
-            order.append(result.video_id)
-        if len(grouped[result.video_id]) < max_frames_per_video:
-            grouped[result.video_id].append(result)
+        grouped[result.video_id].append(result)
 
-    video_results: list[VideoGroupResult] = []
-    for video_id in order:
-        frames = grouped[video_id]
-        if not frames:
-            continue
-        best = frames[0]
+    unranked: list[tuple[float, int, str, SearchResult, list[SearchResult], int]] = []
+    for video_id, raw_frames in grouped.items():
+        ranked_frames = sorted(
+            raw_frames,
+            key=lambda frame: (-frame.score, frame.rank, frame.keyframe_id),
+        )
+        best = ranked_frames[0]
+        if aggregation_method == "max":
+            video_score = best.score
+        else:
+            top_scores = [frame.score for frame in ranked_frames[:mean_top_n]]
+            video_score = sum(top_scores) / len(top_scores)
+        unranked.append(
+            (
+                video_score,
+                best.rank,
+                video_id,
+                best,
+                ranked_frames[:max_frames_per_video],
+                len(raw_frames),
+            )
+        )
+
+    unranked.sort(key=lambda item: (-item[0], item[1], item[2]))
+    video_results: list[VideoResult] = []
+    for rank, (video_score, _best_rank, video_id, best, frames, frame_count) in enumerate(
+        unranked, start=1
+    ):
         video_results.append(
-            VideoGroupResult(
-                rank=len(video_results) + 1,
+            VideoResult(
+                rank=rank,
                 video_id=video_id,
                 group=best.group,
+                video_score=video_score,
                 best_score=best.score,
                 best_keyframe_id=best.keyframe_id,
                 best_frame_idx=best.frame_idx,
                 best_pts_time=best.pts_time,
-                frame_count=len(frames),
-                frames=[_rerank_frame(frame, idx) for idx, frame in enumerate(frames, start=1)],
+                best_keyframe_path=best.keyframe_path,
+                frame_count=frame_count,
+                matched_frame_count=len(frames),
+                aggregation_method=aggregation_method,
+                frames=frames,
             )
         )
     return video_results
+
+
+def group_results_by_video(
+    results: list[SearchResult],
+    max_frames_per_video: int,
+) -> list[VideoResult]:
+    """Backward-compatible max-score video grouping used by Phase-1/2 callers."""
+    return aggregate_results_by_video(
+        results,
+        max_frames_per_video=max_frames_per_video,
+        aggregation_method="max",
+    )
 
 
 def load_query_vector(path: Path) -> np.ndarray:

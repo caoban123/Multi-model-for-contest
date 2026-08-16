@@ -10,6 +10,10 @@ const exportPinsButton = document.querySelector("#export-pins-button");
 const clearHistoryButton = document.querySelector("#clear-history-button");
 const visualModeButton = document.querySelector("#visual-mode-button");
 const metadataModeButton = document.querySelector("#metadata-mode-button");
+const videoRankingButton = document.querySelector("#video-ranking-button");
+const frameRankingButton = document.querySelector("#frame-ranking-button");
+const rankingTabs = document.querySelector("#ranking-tabs");
+const topKLabel = document.querySelector("#top-k-label");
 const statusEl = document.querySelector("#status");
 const healthEl = document.querySelector("#health");
 const resultsEl = document.querySelector("#results");
@@ -19,6 +23,7 @@ const resultTemplate = document.querySelector("#result-template");
 let currentPayload = null;
 let reviewState = new Map();
 let activeMode = "visual";
+let activeRankingMode = "video";
 const STORAGE_KEYS = {
   history: "aic_retrieval_history_v1",
   pins: "aic_retrieval_pins_v1",
@@ -49,7 +54,10 @@ function secondsLabel(value) {
 }
 
 function resultKey(result) {
-  return `${result.video_id}:${result.keyframe_id ?? "metadata"}`;
+  if (result.ranking_mode === "video") {
+    return `video:${result.video_id}`;
+  }
+  return `${result.ranking_mode || "frame"}:${result.video_id}:${result.keyframe_id ?? "metadata"}`;
 }
 
 function loadStoredArray(key) {
@@ -65,17 +73,36 @@ function saveStoredArray(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
-function renderResults(payload) {
+function displayedResults(payload) {
+  if (payload.mode === "metadata") {
+    return (payload.results || []).map((item) => normalizeResult(item, "metadata"));
+  }
+  if (activeRankingMode === "video") {
+    return (payload.video_results || []).map(normalizeVideoResult);
+  }
+  return (payload.raw_results || payload.results || [])
+    .slice(0, payload.top_k || topKInput.value)
+    .map((item) => ({ ...item, ranking_mode: "frame" }));
+}
+
+function renderResults(payload, resetReview = true) {
   currentPayload = payload;
-  reviewState = new Map();
+  if (resetReview) {
+    reviewState = new Map();
+  }
   resultsEl.replaceChildren();
   exportButton.disabled = true;
-  if (!payload.results.length) {
+  const results = displayedResults(payload);
+  if (!results.length) {
     setStatus("No results.");
     return;
   }
-  setStatus(`${payload.results.length} results in ${payload.elapsed_ms.toFixed(1)} ms.`);
-  for (const result of payload.results.map((item) => normalizeResult(item, payload.mode))) {
+  const resultKind = payload.mode === "metadata" ? "metadata results" : `${activeRankingMode} results`;
+  const timing = payload.mode === "visual"
+    ? `retrieval ${Number(payload.retrieval_ms || 0).toFixed(1)} ms + aggregation ${Number(payload.aggregation_ms || 0).toFixed(1)} ms`
+    : `${Number(payload.elapsed_ms || 0).toFixed(1)} ms`;
+  setStatus(`${results.length} ${resultKind} from ${(payload.raw_results || []).length || results.length} candidates · ${timing}.`);
+  for (const result of results) {
     const node = resultTemplate.content.firstElementChild.cloneNode(true);
     node.dataset.resultKey = resultKey(result);
     node.dataset.result = JSON.stringify(result);
@@ -83,10 +110,17 @@ function renderResults(payload) {
     const img = node.querySelector(".thumb");
     node.querySelector(".rank").textContent = `#${result.rank}`;
     node.querySelector(".video-id").textContent = result.video_id;
-    node.querySelector(".score").textContent = result.score.toFixed(4);
+    node.querySelector(".score-label").textContent = result.ranking_mode === "video" ? "Video score" : "Frame score";
+    node.querySelector(".score").textContent = Number(result.score).toFixed(4);
     node.querySelector(".title").textContent = result.metadata.title || "Untitled";
     node.querySelector(".keyframe").textContent = `${result.keyframe_id ?? "-"}`;
+    node.querySelector(".keyframe-label").textContent = result.ranking_mode === "video" ? "Best keyframe" : "Keyframe";
     node.querySelector(".time").textContent = secondsLabel(result.pts_time);
+    const matchedFact = node.querySelector(".matched-fact");
+    matchedFact.hidden = result.ranking_mode !== "video";
+    node.querySelector(".matched-count").textContent = result.ranking_mode === "video"
+      ? `${result.frame_count} pool / ${result.matched_frame_count} shown`
+      : "-";
     node.querySelector(".author").textContent = result.metadata.author || "-";
     node.querySelector(".date").textContent = result.metadata.publish_date || "-";
 
@@ -111,8 +145,10 @@ function renderResults(payload) {
     pinButton.setAttribute("aria-pressed", String(isPinned));
     pinButton.textContent = isPinned ? "Pinned" : "Pin";
     const neighborhoodButton = node.querySelector(".neighborhood-button");
-    const canShowNeighborhood = payload.mode !== "metadata" && result.keyframe_id !== null && result.keyframe_id !== undefined;
+    const canShowNeighborhood = result.ranking_mode === "frame" && result.keyframe_id !== null && result.keyframe_id !== undefined;
     neighborhoodButton.hidden = !canShowNeighborhood;
+    const exploreButton = node.querySelector(".explore-button");
+    exploreButton.hidden = result.ranking_mode !== "video";
     resultsEl.appendChild(node);
   }
   exportButton.disabled = false;
@@ -120,7 +156,7 @@ function renderResults(payload) {
 
 function normalizeResult(result, mode) {
   if (mode !== "metadata") {
-    return result;
+    return { ...result, ranking_mode: "frame" };
   }
   return {
     rank: result.rank,
@@ -133,6 +169,7 @@ function normalizeResult(result, mode) {
     fps: "",
     keyframe_path: "",
     image_url: null,
+    ranking_mode: "metadata",
     matched_terms: result.matched_terms || [],
     metadata: {
       title: result.title || "",
@@ -142,6 +179,18 @@ function normalizeResult(result, mode) {
       keywords: result.keywords || [],
       description_preview: result.description_preview || "",
     },
+  };
+}
+
+function normalizeVideoResult(result) {
+  return {
+    ...result,
+    ranking_mode: "video",
+    score: result.video_score,
+    keyframe_id: result.best_keyframe_id,
+    frame_idx: result.best_frame_idx,
+    pts_time: result.best_pts_time,
+    keyframe_path: result.best_keyframe_path,
   };
 }
 
@@ -159,6 +208,8 @@ async function runSearch(event) {
     top_k: topKInput.value,
     candidate_pool: candidatePoolInput.value,
     max_frames_per_video: "1",
+    matched_frames_per_video: "5",
+    aggregation_method: "max",
   });
   searchButton.disabled = true;
   setStatus(activeMode === "metadata" ? "Searching metadata..." : "Encoding query and searching...");
@@ -167,6 +218,8 @@ async function runSearch(event) {
     if (activeMode === "metadata") {
       params.delete("candidate_pool");
       params.delete("max_frames_per_video");
+      params.delete("matched_frames_per_video");
+      params.delete("aggregation_method");
     }
     const payload = await fetchJson(`${endpoint}?${params.toString()}`);
     payload.original_query = originalQuery;
@@ -300,6 +353,103 @@ async function toggleNeighborhood(target) {
   }
 }
 
+function toggleExplore(target) {
+  const card = target.closest(".result-card");
+  const panel = card.querySelector(".explore-panel");
+  if (!panel.hidden) {
+    panel.hidden = true;
+    target.setAttribute("aria-expanded", "false");
+    target.textContent = "Explore video";
+    return;
+  }
+
+  const result = JSON.parse(card.dataset.result);
+  renderExplorePanel(panel, result);
+  panel.hidden = false;
+  target.setAttribute("aria-expanded", "true");
+  target.textContent = "Hide video details";
+}
+
+function renderExplorePanel(panel, result) {
+  panel.replaceChildren();
+  const heading = document.createElement("h3");
+  heading.className = "explore-heading";
+  heading.textContent = `Matched frames (${result.frame_count} in candidate pool)`;
+  const note = document.createElement("p");
+  note.className = "explore-note";
+  note.textContent = "Matched frames scored against the query. Timeline neighbors are contextual frames and may not match the query.";
+  const list = document.createElement("div");
+  list.className = "matched-frame-list";
+  for (const frame of result.frames || []) {
+    list.appendChild(matchedFrameNode(result.video_id, frame));
+  }
+  if (!list.children.length) {
+    list.appendChild(emptyNeighborhoodState("No matched frames available."));
+  }
+  const timeline = document.createElement("div");
+  timeline.className = "timeline-panel";
+  timeline.appendChild(emptyNeighborhoodState("Choose Timeline on a matched frame to load temporal neighbors."));
+  panel.append(heading, note, list, timeline);
+}
+
+function matchedFrameNode(videoId, frame) {
+  const node = document.createElement("div");
+  node.className = "matched-frame";
+  node.classList.toggle("is-representative", Boolean(frame.is_representative));
+  const thumb = document.createElement("div");
+  thumb.className = "matched-frame-thumb";
+  if (frame.image_url) {
+    const img = document.createElement("img");
+    img.src = frame.image_url;
+    img.alt = `${videoId} keyframe ${frame.keyframe_id}`;
+    img.addEventListener("error", () => {
+      thumb.replaceChildren(emptyNeighborhoodState("No image"));
+    }, { once: true });
+    thumb.appendChild(img);
+  } else {
+    thumb.textContent = "No image";
+  }
+  const meta = document.createElement("div");
+  meta.className = "matched-frame-meta";
+  const title = document.createElement("strong");
+  title.textContent = `${frame.is_representative ? "★ Best match · " : ""}Keyframe ${frame.keyframe_id}`;
+  const detail = document.createElement("span");
+  detail.textContent = `${secondsLabel(frame.pts_time)} · Frame score ${Number(frame.score).toFixed(4)} · Raw rank #${frame.rank}`;
+  meta.append(title, detail);
+  const timelineButton = document.createElement("button");
+  timelineButton.className = "timeline-button secondary-button";
+  timelineButton.type = "button";
+  timelineButton.dataset.videoId = videoId;
+  timelineButton.dataset.keyframeId = String(frame.keyframe_id);
+  timelineButton.textContent = "Timeline";
+  node.append(thumb, meta, timelineButton);
+  return node;
+}
+
+async function loadMatchedFrameTimeline(target) {
+  const panel = target.closest(".explore-panel");
+  const timeline = panel.querySelector(".timeline-panel");
+  target.disabled = true;
+  timeline.replaceChildren(emptyNeighborhoodState("Loading timeline neighbors..."));
+  try {
+    const params = new URLSearchParams({
+      video_id: target.dataset.videoId,
+      keyframe_id: target.dataset.keyframeId,
+      radius: "3",
+    });
+    const payload = await fetchJson(`/api/neighborhood?${params.toString()}`);
+    renderNeighborhood(timeline, payload);
+    const label = document.createElement("div");
+    label.className = "timeline-label";
+    label.textContent = `Timeline neighbors · center keyframe ${payload.keyframe_id}`;
+    timeline.prepend(label);
+  } catch (error) {
+    timeline.replaceChildren(emptyNeighborhoodState(error.message));
+  } finally {
+    target.disabled = false;
+  }
+}
+
 function renderNeighborhood(panel, payload) {
   panel.replaceChildren();
   const header = document.createElement("div");
@@ -361,6 +511,7 @@ function buildCsvRows() {
     "query_id",
     "query_text",
     "mode",
+    "ranking_mode",
     "clip_query",
     "rank",
     "video_id",
@@ -368,6 +519,9 @@ function buildCsvRows() {
     "frame_idx",
     "pts_time",
     "score",
+    "video_score",
+    "frame_count",
+    "aggregation_method",
     "manual_judgement",
     "manual_notes",
     "title",
@@ -376,12 +530,13 @@ function buildCsvRows() {
     "keyframe_path",
   ];
   const rows = [headers];
-  for (const result of currentPayload.results.map((item) => normalizeResult(item, currentPayload.mode))) {
+  for (const result of displayedResults(currentPayload)) {
     const state = reviewState.get(resultKey(result)) || {};
     rows.push([
       queryId,
       currentPayload.original_query || currentPayload.query || "",
       currentPayload.mode || activeMode,
+      result.ranking_mode || "frame",
       currentPayload.mode === "metadata" ? "" : currentPayload.clip_query || currentPayload.query || "",
       result.rank,
       result.video_id,
@@ -389,6 +544,9 @@ function buildCsvRows() {
       result.frame_idx,
       result.pts_time,
       result.score,
+      result.video_score ?? "",
+      result.frame_count ?? "",
+      result.aggregation_method ?? "",
       state.manual_judgement || "",
       state.manual_notes || "",
       result.metadata.title || "",
@@ -405,12 +563,15 @@ function buildPinnedCsvRows() {
     "pinned_at",
     "query_text",
     "mode",
+    "ranking_mode",
     "clip_query",
     "video_id",
     "keyframe_id",
     "frame_idx",
     "pts_time",
     "score",
+    "video_score",
+    "frame_count",
     "title",
     "author",
     "publish_date",
@@ -423,12 +584,15 @@ function buildPinnedCsvRows() {
       item.pinned_at,
       item.query_text,
       item.mode || "",
+      result.ranking_mode || "frame",
       item.clip_query,
       result.video_id,
       result.keyframe_id,
       result.frame_idx,
       result.pts_time,
       result.score,
+      result.video_score ?? "",
+      result.frame_count ?? "",
       result.metadata?.title || "",
       result.metadata?.author || "",
       result.metadata?.publish_date || "",
@@ -551,7 +715,26 @@ function setMode(mode) {
   translateButton.disabled = !isVisual;
   clipQueryInput.disabled = !isVisual;
   candidatePoolInput.disabled = !isVisual;
+  rankingTabs.hidden = !isVisual;
+  topKLabel.textContent = isVisual
+    ? (activeRankingMode === "video" ? "Top videos" : "Top frames")
+    : "Top results";
   setStatus(isVisual ? "Visual search ready." : "Metadata search ready.");
+}
+
+function setRankingMode(mode) {
+  activeRankingMode = mode;
+  const isVideo = mode === "video";
+  videoRankingButton.classList.toggle("is-active", isVideo);
+  frameRankingButton.classList.toggle("is-active", !isVideo);
+  videoRankingButton.setAttribute("aria-pressed", String(isVideo));
+  frameRankingButton.setAttribute("aria-pressed", String(!isVideo));
+  topKLabel.textContent = isVideo ? "Top videos" : "Top frames";
+  if (currentPayload?.mode === "visual") {
+    renderResults(currentPayload, false);
+  } else {
+    setStatus(isVideo ? "Video Ranking ready." : "Frame Ranking debug mode ready.");
+  }
 }
 
 function emptyCompactItem(text) {
@@ -594,6 +777,8 @@ exportPinsButton.addEventListener("click", exportPinnedCsv);
 clearHistoryButton.addEventListener("click", clearHistory);
 visualModeButton.addEventListener("click", () => setMode("visual"));
 metadataModeButton.addEventListener("click", () => setMode("metadata"));
+videoRankingButton.addEventListener("click", () => setRankingMode("video"));
+frameRankingButton.addEventListener("click", () => setRankingMode("frame"));
 resultsEl.addEventListener("click", (event) => {
   if (event.target.classList.contains("judgement-button")) {
     updateJudgement(event.target);
@@ -603,6 +788,12 @@ resultsEl.addEventListener("click", (event) => {
   }
   if (event.target.classList.contains("neighborhood-button")) {
     toggleNeighborhood(event.target);
+  }
+  if (event.target.classList.contains("explore-button")) {
+    toggleExplore(event.target);
+  }
+  if (event.target.classList.contains("timeline-button")) {
+    loadMatchedFrameTimeline(event.target);
   }
 });
 resultsEl.addEventListener("input", (event) => {

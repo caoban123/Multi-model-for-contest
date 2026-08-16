@@ -7,7 +7,7 @@ Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. D�
 Mọi thành viên và AI agent phải đọc theo thứ tự:
 
 1. `.agent/codex.md` - protocol bắt buộc khi làm việc.
-2. `reports/Phase_2_13-08-2026_1.md` - trạng thái mới nhất hiện tại.
+2. `reports/Phase_3_16-08-2026_1.md` - trạng thái mới nhất hiện tại.
 3. `plan/PLAN_AIC2026_VIDEO_RETRIEVAL.md` - kế hoạch tổng thể.
 4. File phase liên quan trong `plan/`, ví dụ `plan/02_PHASE_1_DATA_REGISTRY_BASELINE.md`.
 
@@ -15,7 +15,7 @@ Không bắt đầu sửa code chỉ dựa trên README. Report mới nhất là
 
 ## Trạng Thái Hiện Tại
 
-Trạng thái hiện tại: **Phase 1 hoàn thành cho data registry và baseline retrieval**. L21 là scope KIS đã được chạy integration trên máy hiện tại; L22-L30 là scope registry/mapping/metadata/index-capable theo bộ data chuẩn. Các UI, reranking và bài toán mở rộng thuộc phase sau.
+Trạng thái hiện tại: **Phase 3 đã hoàn tất implementation cho video aggregation/diversity nhưng còn chờ integration verification đầy đủ về ảnh L21 và manual relevance judgement**. L21 là scope KIS đã được chạy integration trên máy hiện tại; L22-L30 vẫn phụ thuộc data local của từng máy.
 
 Đã có:
 
@@ -24,11 +24,12 @@ Trạng thái hiện tại: **Phase 1 hoàn thành cho data registry và baselin
 - Baseline NumPy cosine search bằng query vector `.npy` hoặc text query CLIP; L21 là scope benchmark KIS hiện tại.
 - Test tối thiểu bằng pytest.
 - Metadata lexical search độc lập ở cấp video, chỉ dùng cho thí nghiệm.
+- Local retrieval UI với Video Ranking mặc định, Frame Ranking debug, matched-frame expansion và keyframe-neighborhood timeline.
+- Max-score aggregation ở cấp video và benchmark diversity trước/sau.
 
 Chưa có:
 
 - FAISS index.
-- UI.
 - Q&A.
 - TRAKE.
 - Xử lý video gốc.
@@ -217,6 +218,36 @@ UI cũng lưu search history và pinned results trong browser `localStorage`. C�
 
 Trong mỗi visual result, bấm `Neighbors` để xem các keyframe lân cận trong cùng video. Viewer này dùng mapping/index hiện có, đánh dấu keyframe trung tâm và hữu ích để kiểm tra ngữ cảnh trước/sau một kết quả.
 
+### Phase 3: Video Ranking Và Diversity
+
+Visual search mặc định hiển thị `Video Ranking`: một video chỉ có một card, score video bằng score cao nhất của các keyframe trong candidate pool. `Frame Ranking` giữ raw Top-K keyframe để debug và so sánh duplicate.
+
+Default UI:
+
+```text
+Top videos = 12
+Frame pool = 40
+aggregation = max
+matched frames shown per video = 5
+neighbor radius = 3
+```
+
+Trong video card, bấm `Explore video` để xem các retrieval-matched frames theo score giảm dần. Bấm `Timeline` trên một matched frame để gọi lại Neighbors API và xem ngữ cảnh theo thời gian. Matched frames là kết quả retrieval; timeline neighbors chỉ là frame lân cận và không có retrieval score nếu chúng không nằm trong candidate pool.
+
+API `/api/search` giữ `results` cho tương thích Phase 2 và trả thêm:
+
+- `raw_results`: candidate frames nguyên thứ hạng.
+- `video_results`: Top-K unique videos sau aggregation.
+- `aggregation_method`, `retrieval_ms`, `aggregation_ms` và các config áp dụng.
+
+Benchmark Phase 3 từ output của text benchmark:
+
+```powershell
+python tools\phase3_benchmark.py --input artifacts\benchmarks\l21_phase3_source_pool50.json --judgements-csv artifacts\benchmarks\l21_phase3_source_pool50.csv --top-k 12 --candidate-pool 50 --matched-frames-per-video 5 --aggregation-method max --output artifacts\benchmarks\l21_phase3_comparison_pool50.json
+```
+
+Máy hiện tại chỉ có 18 ảnh keyframe L21 thuộc một video. Retrieval/video ranking vẫn hoạt động với toàn bộ 7.800 vector; card thiếu ảnh hiển thị `No image`. Cần bổ sung full ảnh L21 và chấm manual judgement trước khi đánh dấu Phase 3 `DONE`.
+
 UI có hai chế độ:
 
 - `Visual`: tìm bằng CLIP image features theo keyframe.
@@ -321,4 +352,4 @@ Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 ca
 
 ## Bước Tiếp Theo Đề Xuất
 
-Phase 2 đã có local retrieval UI cho L21, hỗ trợ dịch query bằng Gemini, visual search, metadata search, keyframe-neighborhood viewer, chấm/export CSV review, pin result và search history. Bước tiếp theo là chuẩn bị Phase 3 video aggregation/diversity; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.
+Phase 3 implementation đã có max-score video aggregation, unique-video ranking, representative frame, matched-frame expansion, Frame Ranking debug và L21 neighbor timeline. Bước tiếp theo là bổ sung đầy đủ ảnh keyframe L21 và chấm manual relevance cho benchmark before/after; metadata fusion, object fusion và FAISS vẫn chưa bật mặc định.

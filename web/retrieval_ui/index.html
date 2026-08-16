@@ -16,6 +16,10 @@
             <button id="visual-mode-button" class="mode-button is-active" type="button" aria-pressed="true">Visual</button>
             <button id="metadata-mode-button" class="mode-button" type="button" aria-pressed="false">Metadata</button>
           </div>
+          <div id="ranking-tabs" class="mode-tabs ranking-tabs" aria-label="Visual ranking mode">
+            <button id="video-ranking-button" class="mode-button is-active" type="button" aria-pressed="true">Video Ranking</button>
+            <button id="frame-ranking-button" class="mode-button" type="button" aria-pressed="false">Frame Ranking</button>
+          </div>
         </div>
         <form id="search-form" class="search-form">
           <label class="query-field">
@@ -28,11 +32,11 @@
             <input id="clip-query" name="clip-query" type="search" autocomplete="off" placeholder="a person holding a phone">
           </label>
           <label>
-            <span>Top K</span>
+            <span id="top-k-label">Top videos</span>
             <input id="top-k" name="top-k" type="number" min="1" max="50" value="12">
           </label>
           <label>
-            <span>Pool</span>
+            <span>Frame pool</span>
             <input id="candidate-pool" name="candidate-pool" type="number" min="1" max="200" value="40">
           </label>
           <button id="search-button" type="submit">Search</button>
@@ -75,18 +79,21 @@
         <div class="result-body">
           <div class="result-head">
             <strong class="video-id"></strong>
-            <span class="score"></span>
+            <span class="score-wrap"><span class="score-label"></span>: <span class="score"></span></span>
           </div>
           <p class="title"></p>
           <dl class="facts">
-            <div><dt>Keyframe</dt><dd class="keyframe"></dd></div>
+            <div><dt class="keyframe-label">Keyframe</dt><dd class="keyframe"></dd></div>
             <div><dt>Time</dt><dd class="time"></dd></div>
+            <div class="matched-fact"><dt>Matched in pool</dt><dd class="matched-count"></dd></div>
             <div><dt>Author</dt><dd class="author"></dd></div>
             <div><dt>Date</dt><dd class="date"></dd></div>
           </dl>
           <div class="keywords"></div>
           <div class="review-panel">
             <button class="pin-button secondary-button" type="button" aria-pressed="false">Pin</button>
+            <button class="explore-button secondary-button" type="button" aria-expanded="false">Explore video</button>
+            <div class="explore-panel" hidden></div>
             <button class="neighborhood-button secondary-button" type="button" aria-expanded="false">Neighbors</button>
             <div class="neighborhood-panel" hidden></div>
             <div class="judgement-buttons" aria-label="Manual judgement">

@@ -78,6 +78,11 @@ def test_text_query_benchmark_writes_json_and_csv(tmp_path, monkeypatch, capsys)
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["queries"][0]["results"][0]["video_id"] == "V2"
     assert len(payload["queries"][0]["raw_results"]) == 2
+    assert payload["queries"][0]["video_results"][0]["video_id"] == "V2"
+    assert payload["queries"][0]["video_results"][0]["aggregation_method"] == "max"
+    assert payload["aggregation_method"] == "max"
+    assert payload["retrieval_latency_ms"]["mean"] >= 0
+    assert payload["aggregation_latency_ms"]["mean"] >= 0
     csv_text = csv_output.read_text(encoding="utf-8")
     assert "manual_judgement" in csv_text
     assert "data/keyframes/V2/001.jpg" in csv_text

@@ -4,6 +4,7 @@ import pytest
 import tools.vector_search as vector_search
 from aic_retrieval.search import (
     IndexValidationError,
+    aggregate_results_by_video,
     build_index_metadata,
     diversify_results_by_video,
     find_asset,
@@ -99,7 +100,99 @@ def test_group_results_by_video_keeps_best_video_order() -> None:
 
     assert [item.video_id for item in grouped] == ["V1", "V2"]
     assert grouped[0].best_score == pytest.approx(0.9)
+    assert grouped[0].video_score == pytest.approx(0.9)
+    assert grouped[0].frame_count == 2
+    assert grouped[0].matched_frame_count == 2
     assert [frame.keyframe_id for frame in grouped[0].frames] == [1, 2]
+
+
+def test_max_aggregation_groups_frames_and_selects_representative() -> None:
+    results = [
+        _result(1, "V1", 10, 0.71),
+        _result(2, "V2", 10, 0.85),
+        _result(3, "V1", 20, 0.91),
+        _result(4, "V1", 30, 0.80),
+        _result(5, "V2", 20, 0.84),
+    ]
+
+    videos = aggregate_results_by_video(results, max_frames_per_video=3)
+
+    assert [video.video_id for video in videos] == ["V1", "V2"]
+    assert videos[0].video_score == pytest.approx(0.91)
+    assert videos[0].best_score == pytest.approx(0.91)
+    assert videos[0].best_keyframe_id == 20
+    assert videos[0].frame_count == 3
+    assert [frame.keyframe_id for frame in videos[0].frames] == [20, 30, 10]
+
+
+def test_video_aggregation_tie_breaks_by_original_candidate_rank() -> None:
+    results = [
+        _result(1, "V2", 20, 0.90),
+        _result(2, "V1", 30, 0.90),
+        _result(3, "V2", 10, 0.90),
+    ]
+
+    first = aggregate_results_by_video(results, max_frames_per_video=2)
+    second = aggregate_results_by_video(results, max_frames_per_video=2)
+
+    assert [video.video_id for video in first] == ["V2", "V1"]
+    assert first == second
+    assert first[0].best_keyframe_id == 20
+
+
+def test_video_aggregation_returns_one_card_and_limits_attached_frames() -> None:
+    results = [_result(rank, "V1", rank, 1.0 - rank / 100.0) for rank in range(1, 11)]
+
+    videos = aggregate_results_by_video(results, max_frames_per_video=2)
+
+    assert len(videos) == 1
+    assert videos[0].frame_count == 10
+    assert videos[0].matched_frame_count == 2
+    assert len(videos[0].frames) == 2
+
+
+def test_mean_top_n_is_available_but_max_remains_default() -> None:
+    results = [
+        _result(1, "V1", 1, 0.90),
+        _result(2, "V1", 2, 0.70),
+        _result(3, "V2", 1, 0.85),
+        _result(4, "V2", 2, 0.84),
+    ]
+
+    default_videos = aggregate_results_by_video(results, max_frames_per_video=2)
+    mean_videos = aggregate_results_by_video(
+        results,
+        max_frames_per_video=2,
+        aggregation_method="mean_top_n",
+        mean_top_n=2,
+    )
+
+    assert default_videos[0].video_id == "V1"
+    assert default_videos[0].aggregation_method == "max"
+    assert mean_videos[0].video_id == "V2"
+    assert mean_videos[0].video_score == pytest.approx(0.845)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_frames_per_video": 0}, "max_frames_per_video"),
+        ({"max_frames_per_video": 1, "mean_top_n": 0}, "mean_top_n"),
+        ({"max_frames_per_video": 1, "aggregation_method": "weighted"}, "unsupported"),
+    ],
+)
+def test_video_aggregation_rejects_invalid_configuration(kwargs, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        aggregate_results_by_video([_result(1, "V1", 1, 0.9)], **kwargs)
+
+
+def test_numpy_search_tie_order_is_deterministic_by_index() -> None:
+    index = np.array([[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    refs = [FrameRef(f"V{index}", "L21", 1, index, 0.0, 30.0, None) for index in range(3)]
+
+    results = search_numpy_index(index, refs, np.array([1.0, 0.0], dtype=np.float32), top_k=2)
+
+    assert [result.video_id for result in results] == ["V0", "V1"]
 
 
 def test_vector_search_accepts_text_query(tmp_path, monkeypatch, capsys) -> None:

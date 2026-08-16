@@ -1,11 +1,12 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from aic_retrieval.metadata_search import load_metadata_documents
 from aic_retrieval.retrieval_ui import RetrievalUiConfig, RetrievalUiService, parse_int
-from aic_retrieval.search import FrameRef
+from aic_retrieval.search import FrameRef, SearchResult, aggregate_results_by_video
 
 
 def make_service(tmp_path: Path) -> RetrievalUiService:
@@ -125,3 +126,97 @@ def test_service_keyframe_neighborhood_returns_surrounding_frames(tmp_path: Path
     assert [frame["keyframe_id"] for frame in payload["frames"]] == [1, 2, 3]
     assert [frame["is_center"] for frame in payload["frames"]] == [False, True, False]
     assert payload["frames"][1]["image_url"] == "/keyframe?path=data/keyframes/L21_V001/002.jpg"
+    assert payload["ordering"] == "pts_time_ascending"
+
+
+def test_service_keyframe_neighborhood_handles_boundaries(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    start = service.keyframe_neighborhood("L21_V001", keyframe_id=1, radius=3)
+    end = service.keyframe_neighborhood("L21_V001", keyframe_id=4, radius=3)
+
+    assert [frame["keyframe_id"] for frame in start["frames"]] == [1, 2, 3, 4]
+    assert [frame["keyframe_id"] for frame in end["frames"]] == [1, 2, 3, 4]
+    assert sum(frame["is_center"] for frame in start["frames"]) == 1
+    assert sum(frame["is_center"] for frame in end["frames"]) == 1
+
+
+def test_service_search_exposes_raw_and_video_results_from_candidate_pool(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    service.index = np.array(
+        [
+            [1.0, 0.0],
+            [0.999, 0.001],
+            [0.95, 0.05],
+            [0.80, 0.20],
+        ],
+        dtype=np.float32,
+    )
+    service.index /= np.linalg.norm(service.index, axis=1, keepdims=True)
+    service.refs = [
+        FrameRef("L21_V001", "L21", 1, 0, 0.0, 30.0, None),
+        FrameRef("L21_V001", "L21", 2, 30, 1.0, 30.0, None),
+        FrameRef("L21_V002", "L21", 1, 0, 0.0, 30.0, None),
+        FrameRef("L21_V003", "L21", 1, 0, 0.0, 30.0, None),
+    ]
+    service.assets_by_video.update({"L21_V002": {}, "L21_V003": {}})
+
+    class FakeEncoder:
+        def encode_text(self, text):
+            assert text == "person"
+            return np.array([1.0, 0.0], dtype=np.float32)
+
+    service.encoder = FakeEncoder()
+
+    payload = service.search(
+        "person",
+        top_k=2,
+        candidate_pool=4,
+        max_frames_per_video=1,
+        matched_frames_per_video=2,
+    )
+
+    assert payload["aggregation_method"] == "max"
+    assert payload["candidate_pool_size"] == 4
+    assert len(payload["raw_results"]) == 4
+    assert [item["rank"] for item in payload["raw_results"]] == [1, 2, 3, 4]
+    assert [item["video_id"] for item in payload["video_results"]] == ["L21_V001", "L21_V002"]
+    assert payload["video_results"][0]["frame_count"] == 2
+    assert payload["video_results"][0]["matched_frame_count"] == 2
+    assert len(payload["video_results"][0]["frames"]) == 2
+    assert len(payload["results"]) == 2
+    assert payload["aggregation_ms"] >= 0
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        ("top_k", 0),
+        ("candidate_pool", 0),
+        ("max_frames_per_video", 0),
+        ("matched_frames_per_video", 0),
+        ("mean_top_n", 0),
+    ],
+)
+def test_service_search_rejects_non_positive_configuration(tmp_path: Path, argument: str, value: int) -> None:
+    service = make_service(tmp_path)
+    kwargs = {argument: value}
+
+    with pytest.raises(ValueError, match=argument):
+        service.search("person", **kwargs)
+
+
+def test_enrich_video_result_preserves_non_l21_frame_without_image(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    service.assets_by_video["L23_V001"] = {}
+    raw = [
+        SearchResult(1, 0.9, "L23_V001", "L23", 7, 31, 1.25, 25.0, None),
+    ]
+    video = aggregate_results_by_video(raw, max_frames_per_video=5)[0]
+
+    payload = service.enrich_video_result(__import__("dataclasses").asdict(video))
+
+    assert payload["best_keyframe_path"] is None
+    assert payload["image_url"] is None
+    assert payload["frames"][0]["keyframe_path"] is None
+    assert payload["frames"][0]["image_url"] is None
