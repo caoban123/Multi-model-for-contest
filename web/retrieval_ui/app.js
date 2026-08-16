@@ -40,6 +40,11 @@ const metadataTitleInput = document.querySelector("#metadata-title");
 const metadataFilterModeInput = document.querySelector("#metadata-filter-mode");
 const fusionMethodInput = document.querySelector("#fusion-method");
 const structuredNoteEl = document.querySelector(".structured-note");
+const videoDialog = document.querySelector("#video-dialog");
+const videoPlayer = document.querySelector("#video-player");
+const videoDialogTitle = document.querySelector("#video-dialog-title");
+const videoDialogMeta = document.querySelector("#video-dialog-meta");
+const closeVideoButton = document.querySelector("#close-video-button");
 let currentPayload = null;
 let reviewState = new Map();
 let activeMode = "visual";
@@ -274,6 +279,8 @@ function renderResults(payload, resetReview = true) {
     pinButton.classList.toggle("is-active", isPinned);
     pinButton.setAttribute("aria-pressed", String(isPinned));
     pinButton.textContent = isPinned ? "Pinned" : "Pin";
+    const openVideoButton = node.querySelector(".open-video-button");
+    openVideoButton.hidden = !result.video_url;
     const neighborhoodButton = node.querySelector(".neighborhood-button");
     const canShowNeighborhood = result.ranking_mode === "frame" && result.keyframe_id !== null && result.keyframe_id !== undefined;
     neighborhoodButton.hidden = !canShowNeighborhood;
@@ -299,6 +306,7 @@ function normalizeResult(result, mode) {
     fps: "",
     keyframe_path: "",
     image_url: null,
+    video_url: result.video_url || null,
     ranking_mode: "metadata",
     matched_terms: result.matched_terms || [],
     metadata: {
@@ -351,6 +359,36 @@ function normalizeVideoResult(result) {
     pts_time: result.best_pts_time,
     keyframe_path: result.best_keyframe_path,
   };
+}
+
+function openVideo(target) {
+  const card = target.closest(".result-card");
+  const result = JSON.parse(card.dataset.result);
+  if (!result.video_url) {
+    setStatus("Raw video is unavailable for this result.", true);
+    return;
+  }
+  const startTime = Number(result.pts_time || 0);
+  videoDialogTitle.textContent = `${result.video_id} · ${result.keyframe_id ?? "video"}`;
+  videoDialogMeta.textContent = Number.isFinite(startTime) && startTime > 0
+    ? `Opening around ${secondsLabel(startTime)}`
+    : "Opening from the beginning";
+  videoPlayer.src = result.video_url;
+  videoPlayer.addEventListener("loadedmetadata", () => {
+    if (Number.isFinite(startTime) && startTime > 0 && startTime < videoPlayer.duration) {
+      videoPlayer.currentTime = startTime;
+    }
+  }, { once: true });
+  videoDialog.showModal();
+}
+
+function closeVideo() {
+  videoPlayer.pause();
+  videoPlayer.removeAttribute("src");
+  videoPlayer.load();
+  if (videoDialog.open) {
+    videoDialog.close();
+  }
 }
 
 async function runSearch(event) {
@@ -1067,6 +1105,9 @@ resultsEl.addEventListener("click", (event) => {
   if (event.target.classList.contains("pin-button")) {
     togglePin(event.target);
   }
+  if (event.target.classList.contains("open-video-button")) {
+    openVideo(event.target);
+  }
   if (event.target.classList.contains("neighborhood-button")) {
     toggleNeighborhood(event.target);
   }
@@ -1081,6 +1122,11 @@ resultsEl.addEventListener("input", (event) => {
   if (event.target.classList.contains("note-input")) {
     updateNote(event.target);
   }
+});
+closeVideoButton.addEventListener("click", closeVideo);
+videoDialog.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeVideo();
 });
 renderPins();
 renderHistory();

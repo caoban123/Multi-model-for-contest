@@ -18,6 +18,9 @@ def test_retrieval_ui_contains_review_controls() -> None:
     assert 'id="frame-ranking-button"' in html
     assert 'class="pin-button secondary-button"' in html
     assert 'class="explore-button secondary-button"' in html
+    assert 'class="open-video-button secondary-button"' in html
+    assert 'id="video-dialog"' in html
+    assert 'id="video-player"' in html
     assert 'class="explore-panel"' in html
     assert 'class="neighborhood-button secondary-button"' in html
     assert 'class="neighborhood-panel"' in html
@@ -111,3 +114,16 @@ def test_retrieval_ui_exports_structured_evidence_fields() -> None:
     script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
     for field in ("clip_score","clip_rank","object_score","object_rank","matched_objects","metadata_score","metadata_rank","matched_metadata_fields","fusion_score","fusion_rank","fusion_method"):
         assert f'"{field}"' in script
+
+
+def test_retrieval_ui_has_raw_video_preview_flow() -> None:
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "web" / "retrieval_ui" / "styles.css").read_text(encoding="utf-8")
+
+    assert "video_url" in script
+    assert "openVideo" in script
+    assert "closeVideo" in script
+    assert "videoDialog.showModal" in script
+    assert "open-video-button" in script
+    assert ".video-dialog" in styles
+    assert ".open-video-button[hidden]" in styles

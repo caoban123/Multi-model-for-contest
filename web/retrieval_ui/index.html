@@ -175,6 +175,7 @@
           <div class="review-panel">
             <div class="card-actions">
               <button class="pin-button secondary-button" type="button" aria-pressed="false">Pin</button>
+              <button class="open-video-button secondary-button" type="button">Open video</button>
               <button class="explore-button secondary-button" type="button" aria-expanded="false">Explore video</button>
               <button class="neighborhood-button secondary-button" type="button" aria-expanded="false">Neighbors</button>
             </div>
@@ -193,6 +194,18 @@
         </div>
       </article>
     </template>
+
+    <dialog id="video-dialog" class="video-dialog" aria-labelledby="video-dialog-title">
+      <div class="video-dialog-head">
+        <div>
+          <span class="section-kicker">Raw video preview</span>
+          <h2 id="video-dialog-title">Video</h2>
+          <p id="video-dialog-meta"></p>
+        </div>
+        <button id="close-video-button" class="secondary-button small-button" type="button">Close</button>
+      </div>
+      <video id="video-player" controls preload="metadata"></video>
+    </dialog>
 
     <script src="/static/app.js"></script>
   </body>

@@ -162,6 +162,9 @@ class RetrievalUiService:
         started = time.perf_counter()
         results = search_metadata(self.metadata_docs, query, top_k=top_k, min_match=min_match)
         elapsed_ms = (time.perf_counter() - started) * 1000
+        payload_results = results_to_dict(results)
+        for result in payload_results:
+            result["video_url"] = self.video_url(result["video_id"])
         return {
             "mode": "metadata",
             "query": query,
@@ -170,7 +173,7 @@ class RetrievalUiService:
             "min_match": min_match,
             "elapsed_ms": round(elapsed_ms, 3),
             "total_documents": len(self.metadata_docs),
-            "results": results_to_dict(results),
+            "results": payload_results,
         }
 
     def structured_search(
@@ -322,6 +325,7 @@ class RetrievalUiService:
         metadata = self.video_metadata(video_id)
         keyframe_path = result.get("keyframe_path")
         result["image_url"] = f"/keyframe?path={keyframe_path}" if keyframe_path else None
+        result["video_url"] = self.video_url(video_id)
         result["metadata"] = {
             "title": metadata.get("title", ""),
             "author": metadata.get("author", ""),
@@ -335,6 +339,7 @@ class RetrievalUiService:
         video_id = result["video_id"]
         keyframe_path = result.get("best_keyframe_path")
         result["image_url"] = f"/keyframe?path={keyframe_path}" if keyframe_path else None
+        result["video_url"] = self.video_url(video_id)
         result["metadata"] = self.enrich_result(
             {
                 "video_id": video_id,
@@ -349,6 +354,10 @@ class RetrievalUiService:
                 and frame.get("frame_idx") == result.get("best_frame_idx")
             )
         return result
+
+    def video_url(self, video_id: str) -> str | None:
+        asset = self.assets_by_video.get(video_id, {})
+        return f"/video?video_id={video_id}" if asset.get("video_path") else None
 
     def video_metadata(self, video_id: str) -> dict[str, Any]:
         if video_id in self.metadata_by_video:
@@ -374,6 +383,23 @@ class RetrievalUiService:
             raise PermissionError("keyframe path is outside the repository") from exc
         if not path.is_file():
             raise FileNotFoundError(value)
+        return path
+
+    def resolve_video_path(self, video_id: str) -> Path:
+        video_id = video_id.strip()
+        if not video_id:
+            raise FileNotFoundError("empty video_id")
+        asset = self.assets_by_video.get(video_id)
+        if not asset or not asset.get("video_path"):
+            raise FileNotFoundError(video_id)
+        path = (self.config.repo_root / asset["video_path"]).resolve()
+        repo_root = self.config.repo_root.resolve()
+        try:
+            path.relative_to(repo_root)
+        except ValueError as exc:
+            raise PermissionError("video path is outside the repository") from exc
+        if not path.is_file():
+            raise FileNotFoundError(video_id)
         return path
 
     def _encoder(self) -> ClipTextEncoder:
@@ -427,6 +453,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._handle_translate(parsed.query)
             elif parsed.path == "/keyframe":
                 self._serve_keyframe(parsed.query)
+            elif parsed.path == "/video":
+                self._serve_video(parsed.query)
             else:
                 self._error(HTTPStatus.NOT_FOUND, "not found")
 
@@ -541,6 +569,18 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             with path.open("rb") as handle:
                 self.wfile.write(handle.read())
 
+        def _serve_video(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                path = service.resolve_video_path(first(params, "video_id"))
+            except PermissionError as exc:
+                self._error(HTTPStatus.FORBIDDEN, str(exc))
+                return
+            except FileNotFoundError as exc:
+                self._error(HTTPStatus.NOT_FOUND, str(exc))
+                return
+            self._serve_binary_file(path, supports_range=True)
+
         def _serve_static(self, relative_path: str) -> None:
             path = (config.static_dir / relative_path).resolve()
             try:
@@ -555,6 +595,49 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(path.stat().st_size))
+            self.end_headers()
+            with path.open("rb") as handle:
+                self.wfile.write(handle.read())
+
+        def _serve_binary_file(self, path: Path, supports_range: bool = False) -> None:
+            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            file_size = path.stat().st_size
+            range_header = self.headers.get("Range") if supports_range else None
+            if range_header and range_header.startswith("bytes="):
+                start_text, _, end_text = range_header.removeprefix("bytes=").partition("-")
+                try:
+                    start = int(start_text) if start_text else 0
+                    end = int(end_text) if end_text else file_size - 1
+                except ValueError:
+                    self._error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "invalid range")
+                    return
+                start = max(0, start)
+                end = min(file_size - 1, end)
+                if start > end:
+                    self._error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "invalid range")
+                    return
+                length = end - start + 1
+                self.send_response(HTTPStatus.PARTIAL_CONTENT)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                self.end_headers()
+                with path.open("rb") as handle:
+                    handle.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = handle.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        remaining -= len(chunk)
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(file_size))
+            if supports_range:
+                self.send_header("Accept-Ranges", "bytes")
             self.end_headers()
             with path.open("rb") as handle:
                 self.wfile.write(handle.read())

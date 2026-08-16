@@ -12,6 +12,9 @@ from aic_retrieval.search import FrameRef, SearchResult, aggregate_results_by_vi
 def make_service(tmp_path: Path) -> RetrievalUiService:
     media_dir = tmp_path / "data" / "media-info"
     media_dir.mkdir(parents=True)
+    video_dir = tmp_path / "data" / "videos"
+    video_dir.mkdir(parents=True)
+    (video_dir / "L21_V001.mp4").write_bytes(b"fake video")
     (media_dir / "L21_V001.json").write_text(
         json.dumps(
             {
@@ -34,7 +37,12 @@ def make_service(tmp_path: Path) -> RetrievalUiService:
         static_dir=tmp_path / "web",
         groups={"L21"},
     )
-    service.assets_by_video = {"L21_V001": {"media_info_path": "data/media-info/L21_V001.json"}}
+    service.assets_by_video = {
+        "L21_V001": {
+            "media_info_path": "data/media-info/L21_V001.json",
+            "video_path": "data/videos/L21_V001.mp4",
+        }
+    }
     service.refs_by_video = {
         "L21_V001": [
             FrameRef("L21_V001", "L21", 1, 0, 0.0, 30.0, "data/keyframes/L21_V001/001.jpg"),
@@ -61,6 +69,7 @@ def test_enrich_result_adds_metadata_and_image_url(tmp_path: Path) -> None:
     )
 
     assert result["image_url"] == "/keyframe?path=data/keyframes/L21_V001/001.jpg"
+    assert result["video_url"] == "/video?video_id=L21_V001"
     assert result["metadata"]["title"] == "60 Giây Sáng"
     assert result["metadata"]["keywords"] == ["tin tức", "HTV"]
 
@@ -79,6 +88,25 @@ def test_resolve_keyframe_path_accepts_existing_repo_file(tmp_path: Path) -> Non
     image.write_bytes(b"fake")
 
     assert service.resolve_keyframe_path("data/keyframes/L21_V001/001.jpg") == image.resolve()
+
+
+def test_resolve_video_path_accepts_registered_repo_video(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    video = tmp_path / "data" / "videos" / "L21_V001.mp4"
+
+    assert service.video_url("L21_V001") == "/video?video_id=L21_V001"
+    assert service.resolve_video_path("L21_V001") == video.resolve()
+
+
+def test_resolve_video_path_rejects_missing_or_outside_video(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    with pytest.raises(FileNotFoundError):
+        service.resolve_video_path("L21_V999")
+
+    service.assets_by_video["L21_BAD"] = {"video_path": "../outside.mp4"}
+    with pytest.raises(PermissionError):
+        service.resolve_video_path("L21_BAD")
 
 
 def test_parse_int_falls_back_for_bad_values() -> None:
@@ -114,6 +142,7 @@ def test_service_metadata_search_returns_video_results(tmp_path: Path) -> None:
 
     assert payload["total_documents"] == 1
     assert payload["results"][0]["video_id"] == "L21_V001"
+    assert payload["results"][0]["video_url"] == "/video?video_id=L21_V001"
 
 
 def test_service_keyframe_neighborhood_returns_surrounding_frames(tmp_path: Path) -> None:
