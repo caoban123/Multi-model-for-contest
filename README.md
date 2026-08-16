@@ -64,7 +64,7 @@ Coverage chuẩn đã được ghi nhận trong các report Phase 1 trước đ�
 | `media-info` | L21-L30, 873 file |
 | `objects` | L21-L30, 873 folder |
 | `keyframes` | Chỉ L21, 29 folder trong bộ đầy đủ đã kiểm tra trước đây |
-| `videos` | Không thuộc yêu cầu Phase 1 |
+| `videos` | L21 local hiện có 29 file `.mp4`; video gốc vẫn là dữ liệu optional, không commit |
 
 Các con số trên là coverage tham chiếu của bộ data chuẩn, không phải cam kết rằng mọi máy local đều đã cài đủ toàn bộ data.
 
@@ -349,7 +349,7 @@ Mở `artifacts\benchmarks\l21_weak_text_review_pool50.html` để chấm 150 ca
 - Không commit `data/` hoặc `artifacts/`.
 - Không tải model/dữ liệu lớn nếu chưa được duyệt.
 - Không cài dependency nặng như FAISS hoặc OpenCLIP nếu chưa được duyệt.
-- Không xử lý video gốc vì `data/videos` chưa có.
+- Không decode/re-encode hoặc xử lý hàng loạt video gốc nếu chưa có yêu cầu rõ ràng. `data/videos` hiện có L21 local để audit/mở đúng video về sau.
 - Không đánh dấu phase/module là DONE nếu chưa có bằng chứng test/validation.
 
 ## Bước Tiếp Theo Đề Xuất

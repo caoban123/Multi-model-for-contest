@@ -21,6 +21,7 @@ class VideoAsset:
     media_info_path: str | None
     object_path: str | None
     keyframe_path: str | None
+    video_path: str | None
     has_keyframe_images: bool
     feature_rows: int | None = None
     feature_dim: int | None = None
@@ -28,6 +29,7 @@ class VideoAsset:
     mapping_rows: int | None = None
     keyframe_image_count: int | None = None
     object_file_count: int | None = None
+    video_file_size_bytes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class RegistryValidation:
     warnings: list[dict[str, str]]
     group_counts: dict[str, int]
     keyframe_group_counts: dict[str, int]
+    raw_video_group_counts: dict[str, int]
 
 
 def scan_data_root(data_root: Path) -> list[VideoAsset]:
@@ -48,6 +51,7 @@ def scan_data_root(data_root: Path) -> list[VideoAsset]:
     media_dir = data_root / "media-info"
     objects_dir = data_root / "objects"
     keyframes_dir = data_root / "keyframes"
+    videos_dir = data_root / "videos"
 
     video_ids = set()
     video_ids.update(_ids_from_files(feature_dir, "*.npy"))
@@ -55,6 +59,7 @@ def scan_data_root(data_root: Path) -> list[VideoAsset]:
     video_ids.update(_ids_from_files(media_dir, "*.json"))
     video_ids.update(_ids_from_dirs(objects_dir))
     video_ids.update(_ids_from_dirs(keyframes_dir))
+    video_ids.update(_ids_from_video_files(videos_dir))
 
     assets: list[VideoAsset] = []
     for video_id in sorted(video_ids):
@@ -64,6 +69,7 @@ def scan_data_root(data_root: Path) -> list[VideoAsset]:
         media_path = _existing(media_dir / f"{video_id}.json")
         object_path = _existing(objects_dir / video_id)
         keyframe_path = _existing(keyframes_dir / video_id)
+        video_path = _find_video_file(videos_dir, video_id)
 
         feature_rows: int | None = None
         feature_dim: int | None = None
@@ -77,6 +83,7 @@ def scan_data_root(data_root: Path) -> list[VideoAsset]:
         mapping_rows = count_mapping_rows(Path(mapping_path)) if mapping_path else None
         keyframe_image_count = count_files(Path(keyframe_path), "*.jpg") if keyframe_path else None
         object_file_count = count_files(Path(object_path), "*.json") if object_path else None
+        video_file_size_bytes = Path(video_path).stat().st_size if video_path else None
 
         assets.append(
             VideoAsset(
@@ -87,6 +94,7 @@ def scan_data_root(data_root: Path) -> list[VideoAsset]:
                 media_info_path=_rel(media_path, data_root.parent),
                 object_path=_rel(object_path, data_root.parent),
                 keyframe_path=_rel(keyframe_path, data_root.parent),
+                video_path=_rel(video_path, data_root.parent),
                 has_keyframe_images=keyframe_path is not None,
                 feature_rows=feature_rows,
                 feature_dim=feature_dim,
@@ -94,6 +102,7 @@ def scan_data_root(data_root: Path) -> list[VideoAsset]:
                 mapping_rows=mapping_rows,
                 keyframe_image_count=keyframe_image_count,
                 object_file_count=object_file_count,
+                video_file_size_bytes=video_file_size_bytes,
             )
         )
 
@@ -105,11 +114,14 @@ def validate_assets(assets: list[VideoAsset]) -> RegistryValidation:
     warnings: list[dict[str, str]] = []
     group_counts: dict[str, int] = {}
     keyframe_group_counts: dict[str, int] = {}
+    raw_video_group_counts: dict[str, int] = {}
 
     for asset in assets:
         group_counts[asset.group] = group_counts.get(asset.group, 0) + 1
         if asset.has_keyframe_images:
             keyframe_group_counts[asset.group] = keyframe_group_counts.get(asset.group, 0) + 1
+        if asset.video_path:
+            raw_video_group_counts[asset.group] = raw_video_group_counts.get(asset.group, 0) + 1
 
         for field_name in (
             "clip_feature_path",
@@ -160,6 +172,7 @@ def validate_assets(assets: list[VideoAsset]) -> RegistryValidation:
         warnings=warnings,
         group_counts=dict(sorted(group_counts.items())),
         keyframe_group_counts=dict(sorted(keyframe_group_counts.items())),
+        raw_video_group_counts=dict(sorted(raw_video_group_counts.items())),
     )
 
 
@@ -206,6 +219,23 @@ def _ids_from_dirs(directory: Path) -> set[str]:
     return {path.name for path in directory.iterdir() if path.is_dir()}
 
 
+def _ids_from_video_files(directory: Path) -> set[str]:
+    if not directory.exists():
+        return set()
+    return {path.stem for path in directory.rglob("*") if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".avi", ".mov", ".webm"}}
+
+
+def _find_video_file(directory: Path, video_id: str) -> str | None:
+    if not directory.exists():
+        return None
+    matches = sorted(
+        path
+        for path in directory.rglob(f"{video_id}.*")
+        if path.is_file() and path.suffix.lower() in {".mp4", ".mkv", ".avi", ".mov", ".webm"}
+    )
+    return str(matches[0]) if matches else None
+
+
 def _existing(path: Path) -> str | None:
     return str(path) if path.exists() else None
 
@@ -221,4 +251,3 @@ def _rel(path: str | None, root: Path) -> str | None:
 
 def _issue(video_id: str, code: str, detail: str) -> dict[str, str]:
     return {"video_id": video_id, "code": code, "detail": detail}
-

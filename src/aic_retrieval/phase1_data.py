@@ -169,6 +169,7 @@ def preflight_phase1_data(
             "selected_asset_count": len(selected_assets),
             "selected_groups": sorted(selected_groups),
             "group_counts": dict(sorted(observed_groups.items())),
+            "raw_video_group_counts": validation.raw_video_group_counts,
             "validation": asdict(validation),
         },
         "overall_status": overall_status(checks),
