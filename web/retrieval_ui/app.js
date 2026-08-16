@@ -39,10 +39,12 @@ const metadataDateInput = document.querySelector("#metadata-date");
 const metadataTitleInput = document.querySelector("#metadata-title");
 const metadataFilterModeInput = document.querySelector("#metadata-filter-mode");
 const fusionMethodInput = document.querySelector("#fusion-method");
+const structuredNoteEl = document.querySelector(".structured-note");
 let currentPayload = null;
 let reviewState = new Map();
 let activeMode = "visual";
 let activeRankingMode = "video";
+let structuredSearchAvailable = false;
 const STORAGE_KEYS = {
   history: "aic_retrieval_history_v1",
   pins: "aic_retrieval_pins_v1",
@@ -123,7 +125,7 @@ function structuredConfig() {
   return {
     enabled: structuredEnabledInput.checked,
     enable_clip: enableClipInput.checked,
-    enable_objects: enableObjectsInput.checked,
+    enable_objects: structuredSearchAvailable && enableObjectsInput.checked,
     enable_metadata: enableMetadataInput.checked,
     object_label: objectLabelInput.value.trim(),
     object_min_count: objectMinCountInput.value,
@@ -160,18 +162,25 @@ function applyStructuredConfig(config = {}) {
 
 function updateStructuredControls() {
   const enabled = structuredEnabledInput.checked && activeMode === "visual";
+  if (!structuredSearchAvailable && enableObjectsInput.checked) {
+    enableObjectsInput.checked = false;
+  }
   for (const input of [debugModeInput, enableClipInput, enableObjectsInput, enableMetadataInput, fusionMethodInput]) {
     input.disabled = !enabled;
   }
-  objectFields.disabled = !enabled || !enableObjectsInput.checked;
+  enableObjectsInput.disabled = !enabled || !structuredSearchAvailable;
+  objectFields.disabled = !enabled || !structuredSearchAvailable || !enableObjectsInput.checked;
   metadataFields.disabled = !enabled || !enableMetadataInput.checked;
+  structuredNoteEl.textContent = structuredSearchAvailable
+    ? "Structured mode is experimental. Turning it off keeps the Phase 3 CLIP search path unchanged."
+    : "Structured mode is experimental. Object evidence unavailable until the local SQLite object store is built.";
 }
 
 function applyDebugPreset() {
   const preset = debugModeInput.value;
   if (preset === "custom") return;
   enableClipInput.checked = ["clip-only", "hybrid"].includes(preset);
-  enableObjectsInput.checked = ["object-only", "hybrid"].includes(preset);
+  enableObjectsInput.checked = structuredSearchAvailable && ["object-only", "hybrid"].includes(preset);
   enableMetadataInput.checked = ["metadata-only", "hybrid"].includes(preset);
   updateStructuredControls();
 }
@@ -363,6 +372,10 @@ async function runSearch(event) {
   });
   const structured = activeMode === "visual" ? structuredConfig() : { enabled: false };
   if (structured.enabled) {
+    if (!structured.enable_clip && !structured.enable_objects && !structured.enable_metadata) {
+      setStatus("Enable at least one structured retrieval channel.", true);
+      return;
+    }
     for (const [key, value] of Object.entries(structured)) {
       if (key !== "enabled" && key !== "debug_mode" && value !== "") params.set(key, String(value));
     }
@@ -1014,10 +1027,13 @@ async function loadHealth() {
     const badges = [
       { text: payload.groups.join(", "), className: "is-primary" },
       { text: `${Number(payload.index_vectors).toLocaleString()} keyframes` },
-      { text: `${payload.index_dim} dim` },
-      { text: `${payload.metadata_documents} videos` },
-      { text: translation, className: payload.translation_configured ? "is-success" : "" },
-    ];
+        { text: `${payload.index_dim} dim` },
+        { text: `${payload.metadata_documents} videos` },
+        { text: payload.structured_search_available ? "objects on" : "objects off", className: payload.structured_search_available ? "is-success" : "" },
+        { text: translation, className: payload.translation_configured ? "is-success" : "" },
+      ];
+    structuredSearchAvailable = Boolean(payload.structured_search_available);
+    updateStructuredControls();
     healthEl.replaceChildren();
     for (const badge of badges) {
       const node = document.createElement("span");

@@ -7,7 +7,7 @@ Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. D�
 Mọi thành viên và AI agent phải đọc theo thứ tự:
 
 1. `.agent/codex.md` - protocol bắt buộc khi làm việc.
-2. `reports/Phase_3_16-08-2026_1.md` - trạng thái mới nhất hiện tại.
+2. `reports/Phase_4_16-08-2026_12.md` - trạng thái mới nhất hiện tại.
 3. `plan/PLAN_AIC2026_VIDEO_RETRIEVAL.md` - kế hoạch tổng thể.
 4. File phase liên quan trong `plan/`, ví dụ `plan/02_PHASE_1_DATA_REGISTRY_BASELINE.md`.
 
@@ -15,7 +15,7 @@ Không bắt đầu sửa code chỉ dựa trên README. Report mới nhất là
 
 ## Trạng Thái Hiện Tại
 
-Trạng thái hiện tại: **Phase 3 đã hoàn tất implementation cho video aggregation/diversity nhưng còn chờ integration verification đầy đủ về ảnh L21 và manual relevance judgement**. L21 là scope KIS đã được chạy integration trên máy hiện tại; L22-L30 vẫn phụ thuộc data local của từng máy.
+Trạng thái hiện tại: **Phase 4 đã có structured/hybrid retrieval ở dạng opt-in experimental, nhưng chưa được promote làm mặc định vì còn thiếu manual relevance judgement**. L21 là scope KIS đã được chạy integration trên máy hiện tại; L22-L30 vẫn phụ thuộc data local của từng máy.
 
 Đã có:
 
@@ -26,10 +26,12 @@ Trạng thái hiện tại: **Phase 3 đã hoàn tất implementation cho video 
 - Metadata lexical search độc lập ở cấp video, chỉ dùng cho thí nghiệm.
 - Local retrieval UI với Video Ranking mặc định, Frame Ranking debug, matched-frame expansion và keyframe-neighborhood timeline.
 - Max-score aggregation ở cấp video và benchmark diversity trước/sau.
+- Structured retrieval experimental qua endpoint riêng `/api/structured-search`, có thể dùng CLIP, metadata và object evidence khi SQLite object store local đã được build.
 
 Chưa có:
 
 - FAISS index.
+- Vector database.
 - Q&A.
 - TRAKE.
 - Xử lý video gốc.
