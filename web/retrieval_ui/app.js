@@ -364,6 +364,10 @@ function normalizeVideoResult(result) {
 function openVideo(target) {
   const card = target.closest(".result-card");
   const result = JSON.parse(card.dataset.result);
+  openVideoResult(result);
+}
+
+function openVideoResult(result) {
   if (!result.video_url) {
     setStatus("Raw video is unavailable for this result.", true);
     return;
@@ -373,6 +377,9 @@ function openVideo(target) {
   videoDialogMeta.textContent = Number.isFinite(startTime) && startTime > 0
     ? `Opening around ${secondsLabel(startTime)}`
     : "Opening from the beginning";
+  if (videoDialog.open) {
+    closeVideo();
+  }
   videoPlayer.src = result.video_url;
   videoPlayer.addEventListener("loadedmetadata", () => {
     if (Number.isFinite(startTime) && startTime > 0 && startTime < videoPlayer.duration) {
@@ -498,6 +505,7 @@ function updateJudgement(target) {
   const state = reviewState.get(key) || {};
   state.manual_judgement = target.dataset.judgement;
   reviewState.set(key, state);
+  syncPinnedReview(key, state);
   for (const button of card.querySelectorAll(".judgement-button")) {
     const isActive = button === target;
     button.classList.toggle("is-active", isActive);
@@ -511,12 +519,25 @@ function updateNote(target) {
   const state = reviewState.get(key) || {};
   state.manual_notes = target.value;
   reviewState.set(key, state);
+  syncPinnedReview(key, state);
+}
+
+function syncPinnedReview(key, state) {
+  const pinned = pinnedResults.find((item) => item.key === key);
+  if (!pinned) {
+    return;
+  }
+  pinned.manual_judgement = state.manual_judgement || "";
+  pinned.manual_notes = state.manual_notes || "";
+  saveStoredArray(STORAGE_KEYS.pins, pinnedResults);
+  renderPins();
 }
 
 function togglePin(target) {
   const card = target.closest(".result-card");
   const result = JSON.parse(card.dataset.result);
   const key = resultKey(result);
+  const state = reviewState.get(key) || {};
   const existing = pinnedResults.findIndex((item) => item.key === key);
   if (existing >= 0) {
     pinnedResults.splice(existing, 1);
@@ -531,6 +552,10 @@ function togglePin(target) {
         query_text: currentPayload?.original_query || currentPayload?.query || "",
         clip_query: currentPayload?.mode === "metadata" ? "" : currentPayload?.clip_query || currentPayload?.query || "",
         mode: currentPayload?.mode || activeMode,
+        ranking_mode: result.ranking_mode || activeRankingMode,
+        rank: result.rank ?? "",
+        manual_judgement: state.manual_judgement || "",
+        manual_notes: state.manual_notes || "",
         result,
       },
       ...pinnedResults,
@@ -774,16 +799,22 @@ function buildCsvRows() {
     "fusion_score",
     "fusion_rank",
     "fusion_method",
+    "is_pinned",
+    "pinned_at",
     "manual_judgement",
     "manual_notes",
     "title",
     "author",
     "publish_date",
+    "video_url",
+    "watch_url",
+    "description_preview",
     "keyframe_path",
   ];
   const rows = [headers];
   for (const result of displayedResults(currentPayload)) {
     const state = reviewState.get(resultKey(result)) || {};
+    const pinned = pinnedResults.find((item) => item.key === resultKey(result));
     const evidence = evidenceCsvFields(result);
     rows.push([
       queryId,
@@ -811,11 +842,16 @@ function buildCsvRows() {
       evidence.fusion_score,
       evidence.fusion_rank,
       evidence.fusion_method,
+      pinned ? "1" : "0",
+      pinned?.pinned_at || "",
       state.manual_judgement || "",
       state.manual_notes || "",
       result.metadata.title || "",
       result.metadata.author || "",
       result.metadata.publish_date || "",
+      result.video_url || "",
+      result.metadata.watch_url || "",
+      result.metadata.description_preview || "",
       result.keyframe_path || "",
     ]);
   }
@@ -847,9 +883,17 @@ function buildPinnedCsvRows() {
     "fusion_score",
     "fusion_rank",
     "fusion_method",
+    "manual_judgement",
+    "manual_notes",
+    "submission_video_id",
+    "submission_keyframe_id",
+    "submission_pts_time",
     "title",
     "author",
     "publish_date",
+    "video_url",
+    "watch_url",
+    "description_preview",
     "keyframe_path",
   ];
   const rows = [headers];
@@ -880,9 +924,17 @@ function buildPinnedCsvRows() {
       evidence.fusion_score,
       evidence.fusion_rank,
       evidence.fusion_method,
+      item.manual_judgement || "",
+      item.manual_notes || "",
+      result.video_id,
+      result.keyframe_id,
+      result.pts_time,
       result.metadata?.title || "",
       result.metadata?.author || "",
       result.metadata?.publish_date || "",
+      result.video_url || "",
+      result.metadata?.watch_url || "",
+      result.metadata?.description_preview || "",
       result.keyframe_path || "",
     ]);
   }
@@ -950,7 +1002,21 @@ function renderPins() {
     title.textContent = `${result.video_id} #${result.keyframe_id ?? "-"}`;
     const meta = document.createElement("div");
     meta.className = "compact-meta";
-    meta.textContent = `${secondsLabel(result.pts_time)} - ${result.metadata?.title || "Untitled"}`;
+    const reviewLabel = item.manual_judgement ? ` - ${item.manual_judgement}` : "";
+    meta.textContent = `${secondsLabel(result.pts_time)} - rank #${item.rank || result.rank || "-"}${reviewLabel} - ${result.metadata?.title || "Untitled"}`;
+    const query = document.createElement("div");
+    query.className = "compact-meta compact-query";
+    query.textContent = item.query_text ? `Query: ${item.query_text}` : "Query unavailable";
+    const actions = document.createElement("div");
+    actions.className = "pin-actions";
+    if (result.video_url) {
+      const openVideo = document.createElement("button");
+      openVideo.className = "secondary-button small-button";
+      openVideo.type = "button";
+      openVideo.textContent = "Open video";
+      openVideo.addEventListener("click", () => openVideoResult(result));
+      actions.appendChild(openVideo);
+    }
     const remove = document.createElement("button");
     remove.className = "secondary-button small-button";
     remove.type = "button";
@@ -961,7 +1027,8 @@ function renderPins() {
       syncVisiblePinButtons();
       renderPins();
     });
-    node.append(title, meta, remove);
+    actions.appendChild(remove);
+    node.append(title, meta, query, actions);
     pinsListEl.appendChild(node);
   }
 }

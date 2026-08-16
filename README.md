@@ -218,6 +218,14 @@ CSV export có các cột tương thích với benchmark review như `query_id`,
 
 UI cũng lưu search history và pinned results trong browser `localStorage`. Có thể bấm lại query trong `History`, hoặc xuất riêng danh sách pinned bằng `Export Pins`.
 
+Pin review workflow:
+
+- `Pin` lưu snapshot của candidate đang xem, kèm query, ranking mode, rank, score, metadata và video URL nếu có raw video.
+- Nếu đã pin rồi mới chọn `Good`/`Partial`/`Bad` hoặc ghi note, pin sẽ tự động cập nhật judgement/note.
+- Trong panel `Pins`, bấm `Open video` để mở lại raw video ở timestamp của candidate đã pin.
+- `Export CSV` xuất toàn bộ result đang hiển thị, có thêm `is_pinned`, `pinned_at`, `video_url`, `watch_url` và `description_preview`.
+- `Export Pins` xuất shortlist riêng, có thêm `manual_judgement`, `manual_notes`, `submission_video_id`, `submission_keyframe_id` và `submission_pts_time`.
+
 Trong mỗi visual result, bấm `Neighbors` để xem các keyframe lân cận trong cùng video. Viewer này dùng mapping/index hiện có, đánh dấu keyframe trung tâm và hữu ích để kiểm tra ngữ cảnh trước/sau một kết quả.
 
 ### Phase 3: Video Ranking Và Diversity

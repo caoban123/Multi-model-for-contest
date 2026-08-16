@@ -41,6 +41,10 @@ def test_retrieval_ui_exports_benchmark_compatible_csv_fields() -> None:
         "video_id",
         "keyframe_id",
         "score",
+        "is_pinned",
+        "pinned_at",
+        "video_url",
+        "watch_url",
         "manual_judgement",
         "manual_notes",
     ):
@@ -54,6 +58,9 @@ def test_retrieval_ui_uses_local_storage_for_pins_and_history() -> None:
     assert "aic_retrieval_history_v1" in script
     assert "aic_retrieval_pins_v1" in script
     assert "buildPinnedCsvRows" in script
+    assert "syncPinnedReview" in script
+    assert "submission_video_id" in script
+    assert "submission_pts_time" in script
     assert "Exported ${rows.length - 1} pinned rows." in script
 
 
@@ -122,8 +129,10 @@ def test_retrieval_ui_has_raw_video_preview_flow() -> None:
 
     assert "video_url" in script
     assert "openVideo" in script
+    assert "openVideoResult" in script
     assert "closeVideo" in script
     assert "videoDialog.showModal" in script
     assert "open-video-button" in script
+    assert "pin-actions" in script
     assert ".video-dialog" in styles
     assert ".open-video-button[hidden]" in styles

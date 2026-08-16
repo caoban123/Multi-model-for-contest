@@ -664,6 +664,16 @@ label {
   line-height: 1.4;
 }
 
+.compact-query {
+  overflow-wrap: anywhere;
+}
+
+.pin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .result-card {
   overflow: hidden;
   border: 1px solid var(--border);
