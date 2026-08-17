@@ -29,6 +29,9 @@ from aic_retrieval.object_store import load_alias_dictionary
 from aic_retrieval.structured_query import ObjectConstraint, StructuredQuery
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
 from aic_retrieval.translation import ExternalTranslator, TranslationConfig
+from aic_retrieval.phase5_store import Phase5SearchService
+from aic_retrieval.query_planner import RuleBasedQueryPlanner
+from aic_retrieval.reranking import RerankerConfig, load_reranker_config, rerank_video_results, reranker_metadata, with_top_n
 
 
 DEFAULT_TOP_K_VIDEOS = 12
@@ -55,6 +58,8 @@ class RetrievalUiConfig:
     translation: TranslationConfig | None = None
     object_store_path: Path | None = None
     object_aliases_path: Path | None = None
+    phase5_store_path: Path | None = None
+    phase6_config_path: Path | None = None
 
 
 class RetrievalUiService:
@@ -87,7 +92,12 @@ class RetrievalUiService:
             aliases_path = config.object_aliases_path or config.repo_root / "config" / "object_aliases_v1.json"
             self.object_service = ObjectSearchService(config.object_store_path, load_alias_dictionary(aliases_path))
         self.attribute_service = ColorAttributeService(config.repo_root, self.refs)
-        self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs, self.attribute_service)
+        self.phase5_service = Phase5SearchService(config.phase5_store_path, self.refs) if config.phase5_store_path else None
+        self.query_planner = RuleBasedQueryPlanner()
+        self.reranker_config = load_reranker_config(config.phase6_config_path) if config.phase6_config_path and config.phase6_config_path.is_file() else RerankerConfig()
+        phase6_payload = json.loads(config.phase6_config_path.read_text(encoding="utf-8")) if config.phase6_config_path and config.phase6_config_path.is_file() else {}
+        self.rrf_config = RrfConfig(**phase6_payload.get("fusion", {}))
+        self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs, self.attribute_service, self.phase5_service)
 
     def search(
         self,
@@ -187,12 +197,17 @@ class RetrievalUiService:
         enable_objects: bool = False,
         enable_metadata: bool = False,
         enable_attributes: bool = False,
+        enable_ocr: bool = False,
+        enable_asr: bool = False,
         object_label: str = "",
         object_min_count: int = 1,
         object_position: str = "any",
         object_min_confidence: float = 0.3,
         attribute_color: str = "",
         attribute_filter_mode: str = "soft",
+        ocr_filter_mode: str = "soft",
+        asr_filter_mode: str = "soft",
+        ocr_min_confidence: float = 0.0,
         metadata_author: str | None = None,
         metadata_date: str | None = None,
         metadata_title: str | None = None,
@@ -200,12 +215,18 @@ class RetrievalUiService:
         object_filter_mode: str = "soft",
         metadata_filter_mode: str = "soft",
         matched_frames_per_video: int = DEFAULT_MATCHED_FRAMES_PER_VIDEO,
+        enable_query_planner: bool = False,
+        enable_reranker: bool = False,
+        reranker_top_n: int = 20,
+        query_variants: tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
         query = query.strip()
         if not query:
             raise ValueError("query must not be empty")
         _require_positive("top_k", top_k); _require_positive("candidate_pool", candidate_pool)
         _require_positive("object_min_count", object_min_count); _require_positive("matched_frames_per_video", matched_frames_per_video)
+        if enable_reranker:
+            _require_positive("reranker_top_n", reranker_top_n)
         if enable_objects and not object_label.strip():
             raise ValueError("object_label is required when objects are enabled")
         horizontal, vertical = parse_object_position(object_position)
@@ -218,12 +239,17 @@ class RetrievalUiService:
             raise ValueError("attribute_color is required when attributes are enabled and no color is found in the query")
         structured_query = StructuredQuery(
             visual_text=query, enable_clip=enable_clip, enable_objects=enable_objects, enable_metadata=enable_metadata, enable_attributes=enable_attributes,
+            enable_ocr=enable_ocr, enable_asr=enable_asr,
             clip_mode="soft" if enable_clip else "disabled", object_constraints=object_constraints, attribute_constraints=attribute_constraints,
             attribute_mode=attribute_filter_mode if enable_attributes else "disabled",
             metadata_constraints=MetadataConstraints(channel=metadata_author or None, publish_date=metadata_date or None, title_phrase=metadata_title or None),
             metadata_mode=metadata_filter_mode if enable_metadata else "disabled", clip_candidate_pool=max(candidate_pool, top_k), fusion_method=fusion_method,
+            ocr_mode=ocr_filter_mode if enable_ocr else "disabled", asr_mode=asr_filter_mode if enable_asr else "disabled", ocr_min_confidence=ocr_min_confidence,
         )
         started = time.perf_counter()
+        query_plan = self.query_planner.plan(query) if enable_query_planner or enable_reranker else None
+        if query_plan is not None and query_variants is not None:
+            query_plan = self.query_planner.select_variants(query_plan, query_variants)
         encode_started = time.perf_counter()
         query_vector = self._encoder().encode_text(query) if enable_clip or enable_metadata else None
         encode_ms = (time.perf_counter() - encode_started) * 1000
@@ -231,7 +257,22 @@ class RetrievalUiService:
         candidate_payload = self.structured_generator.generate(structured_query, query_vector)
         candidate_ms = (time.perf_counter() - candidate_started) * 1000
         fusion_started = time.perf_counter()
-        ranked = rank_video_candidates(candidate_payload, structured_query, RrfConfig(), min(top_k, 50), min(matched_frames_per_video, 50))
+        ranking_limit = min(max(top_k, reranker_top_n if enable_reranker else top_k), 50)
+        ranked = rank_video_candidates(candidate_payload, structured_query, self.rrf_config, ranking_limit, min(matched_frames_per_video, 50))
+        reranker_config = with_top_n(self.reranker_config, min(reranker_top_n, ranking_limit)) if enable_reranker else None
+        if enable_reranker and query_plan is not None:
+            assert reranker_config is not None
+            ranked["video_results"] = rerank_video_results(ranked["video_results"], query_plan, reranker_config)[:top_k]
+            ranked["video_groups"] = ranked["video_results"]
+            ranked["results"] = [
+                {**next(frame for frame in item["frames"] if frame["is_representative"]), "rank":item["rank"], "score":item["rerank_score"], "rerank_score":item["rerank_score"], "pre_rerank_rank":item["pre_rerank_rank"]}
+                for item in ranked["video_results"]
+            ]
+        else:
+            ranked["video_results"] = ranked["video_results"][:top_k]
+            ranked["video_groups"] = ranked["video_results"]
+            ranked["results"] = ranked["results"][:top_k]
+        ranked["top_k"] = top_k
         fusion_ms = (time.perf_counter() - fusion_started) * 1000
         ranked["video_results"] = [self.enrich_video_result(item) for item in ranked["video_results"]]
         ranked["video_groups"] = ranked["video_results"]
@@ -244,13 +285,22 @@ class RetrievalUiService:
             result["evidence"] = evidence_by_video[result["video_id"]]
         for result in ranked["raw_results"]:
             result["evidence"] = evidence_by_video.get(result["video_id"], result.get("evidence", {}))
-        return {
+        response = {
             "mode":"structured", "experimental":True, "default_search_unchanged":True, "query":query,
             "structured_query":asdict(structured_query), "candidate_pool":candidate_pool, "top_k":top_k,
             "encode_ms":round(encode_ms,3), "candidate_generation_ms":round(candidate_ms,3), "fusion_ms":round(fusion_ms,3),
             "elapsed_ms":round((time.perf_counter()-started)*1000,3), "channel_counts":candidate_payload["channel_counts"],
             "unknown_object_frame_count":candidate_payload["unknown_object_frame_count"], "unknown_attribute_frame_count":candidate_payload["unknown_attribute_frame_count"], **ranked,
         }
+        if query_plan is not None:
+            response["query_plan"] = query_plan.to_dict()
+        if enable_reranker:
+            assert reranker_config is not None
+            response["reranker"] = reranker_metadata(reranker_config)
+        return response
+
+    def query_plan(self, query: str) -> dict[str, Any]:
+        return self.query_planner.plan(query).to_dict()
 
     def structured_evidence(self, result: dict[str, Any], query: StructuredQuery, fusion_config: dict[str, Any]) -> dict[str, Any]:
         ranks = result["modality_ranks"]
@@ -258,6 +308,8 @@ class RetrievalUiService:
         object_enabled = query.enable_objects and any(item.filter_mode != "disabled" for item in query.object_constraints)
         attribute_enabled = query.enable_attributes and query.attribute_mode != "disabled" and bool(query.attribute_constraints)
         metadata_enabled = query.enable_metadata and query.metadata_mode != "disabled"
+        ocr_enabled = query.enable_ocr and query.ocr_mode != "disabled"
+        asr_enabled = query.enable_asr and query.asr_mode != "disabled"
         video_frames = self.refs_by_video.get(result["video_id"], [])
         clip_status = "matched" if ranks["clip"] is not None else ("not_matched" if clip_enabled and video_frames else ("unknown" if clip_enabled else "disabled"))
         object_data = self.object_service.video_data_status(result["video_id"]) if object_enabled and self.object_service else {"status":"UNKNOWN","available_frames":0,"unknown_frames":len(video_frames)}
@@ -269,12 +321,16 @@ class RetrievalUiService:
         metadata_status = "matched" if ranks["metadata"] is not None else ("not_matched" if metadata_enabled and metadata_known else ("unknown" if metadata_enabled else "disabled"))
         object_matches = []
         attribute_matches = []
+        ocr_matches = []
+        asr_matches = []
         metadata_match = None
         clip_scores = []
         for frame in result["frames"]:
             if frame.get("clip_score") is not None: clip_scores.append(frame["clip_score"])
             object_matches.extend(frame.get("evidence", {}).get("object", []))
             attribute_matches.extend(frame.get("evidence", {}).get("attribute", []))
+            ocr_matches.extend(frame.get("evidence", {}).get("ocr", []))
+            asr_matches.extend(frame.get("evidence", {}).get("asr", []))
             metadata_match = metadata_match or frame.get("evidence", {}).get("metadata")
         attribute_status = "matched" if ranks["attribute"] is not None else ("not_matched" if attribute_enabled else "disabled")
         return {
@@ -282,6 +338,8 @@ class RetrievalUiService:
             "objects":{"enabled":object_enabled,"status":object_status,"rank":ranks["object"],"data_coverage":object_data,"matches":object_matches},
             "attributes":{"enabled":attribute_enabled,"status":attribute_status,"rank":ranks["attribute"],"matches":attribute_matches},
             "metadata":{"enabled":metadata_enabled,"status":metadata_status,"rank":ranks["metadata"],"level":"video","matched_fields":metadata_match["evidence"] if metadata_match else []},
+            "ocr":{"enabled":ocr_enabled,"status":"matched" if ranks.get("ocr") is not None else ("not_matched" if ocr_enabled and getattr(self,"phase5_service",None) and self.phase5_service.available else ("unknown" if ocr_enabled else "disabled")),"rank":ranks.get("ocr"),"matches":ocr_matches},
+            "asr":{"enabled":asr_enabled,"status":"matched" if ranks.get("asr") is not None else ("not_matched" if asr_enabled and getattr(self,"phase5_service",None) and self.phase5_service.available else ("unknown" if asr_enabled else "disabled")),"rank":ranks.get("asr"),"matches":asr_matches},
             "fusion":{"method":"rrf","config":fusion_config}, "representative_rule":result["representative_rule"],
         }
 
@@ -310,6 +368,8 @@ class RetrievalUiService:
             item = asdict(ref)
             item["is_center"] = ref.keyframe_id == keyframe_id
             item["image_url"] = f"/keyframe?path={ref.keyframe_path}" if ref.keyframe_path else None
+            phase5_service = getattr(self, "phase5_service", None)
+            item["phase5_evidence"] = phase5_service.evidence_for_frame(video_id, ref.keyframe_id) if phase5_service else {"ocr": [], "asr": []}
             frames.append(item)
 
         return {
@@ -455,6 +515,10 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "default_candidate_pool_size": DEFAULT_CANDIDATE_POOL_SIZE,
                         "structured_search_available": service.object_service is not None,
                         "attribute_search_available": service.attribute_service.available,
+                        "ocr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.available),
+                        "asr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.available),
+                        "query_planner_available": True,
+                        "reranker_available": True,
                     }
                 )
             elif parsed.path == "/api/search":
@@ -467,6 +531,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._handle_neighborhood(parsed.query)
             elif parsed.path == "/api/translate":
                 self._handle_translate(parsed.query)
+            elif parsed.path == "/api/query-plan":
+                self._handle_query_plan(parsed.query)
             elif parsed.path == "/keyframe":
                 self._serve_keyframe(parsed.query)
             elif parsed.path == "/video":
@@ -535,13 +601,25 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     first(params,"q"), top_k=parse_int(first(params,"top_k","12"),12), candidate_pool=parse_int(first(params,"candidate_pool","100"),100),
                     enable_clip=parse_bool(first(params,"enable_clip","true")), enable_objects=parse_bool(first(params,"enable_objects","false")),
                     enable_metadata=parse_bool(first(params,"enable_metadata","false")), enable_attributes=parse_bool(first(params,"enable_attributes","false")), object_label=first(params,"object_label"),
+                    enable_ocr=parse_bool(first(params,"enable_ocr","false")), enable_asr=parse_bool(first(params,"enable_asr","false")),
                     object_min_count=parse_int(first(params,"object_min_count","1"),1), object_position=first(params,"object_position","any"),
                     object_min_confidence=parse_float(first(params,"object_min_confidence","0.3"),0.3), attribute_color=first(params,"attribute_color"),
                     attribute_filter_mode=first(params,"attribute_filter_mode","soft"), metadata_author=first(params,"metadata_author") or None,
                     metadata_date=first(params,"metadata_date") or None, metadata_title=first(params,"metadata_title") or None,
                     fusion_method=first(params,"fusion_method","rrf"), object_filter_mode=first(params,"object_filter_mode","soft"),
                     metadata_filter_mode=first(params,"metadata_filter_mode","soft"), matched_frames_per_video=parse_int(first(params,"matched_frames_per_video","5"),5),
+                    ocr_filter_mode=first(params,"ocr_filter_mode","soft"), asr_filter_mode=first(params,"asr_filter_mode","soft"), ocr_min_confidence=parse_float(first(params,"ocr_min_confidence","0"),0),
+                    enable_query_planner=parse_bool(first(params,"enable_query_planner","false")), enable_reranker=parse_bool(first(params,"enable_reranker","false")), reranker_top_n=parse_int(first(params,"reranker_top_n","20"),20),
+                    query_variants=tuple(item for item in first(params,"query_variants").split("||") if item) if "query_variants" in params else None,
                 )
+            except Exception as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
+            self._json(payload)
+
+        def _handle_query_plan(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                payload = service.query_plan(first(params, "q"))
             except Exception as exc:
                 self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
             self._json(payload)

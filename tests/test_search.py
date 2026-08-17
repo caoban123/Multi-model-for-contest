@@ -61,6 +61,16 @@ def test_save_and_load_numpy_index_roundtrip(tmp_path) -> None:
     assert loaded_metadata == metadata
 
 
+@pytest.mark.parametrize("present,missing", [("refs.json","vectors.npy"),("vectors.npy","refs.json")])
+def test_load_numpy_index_reports_each_missing_required_file(tmp_path,present,missing) -> None:
+    if present == "vectors.npy":
+        np.save(tmp_path/present,np.array([[1.0]],dtype=np.float32))
+    else:
+        (tmp_path/present).write_text("[]",encoding="utf-8")
+    with pytest.raises(FileNotFoundError,match=missing.replace(".",r"\.")):
+        load_numpy_index(tmp_path)
+
+
 def test_find_asset_returns_matching_video() -> None:
     registry = {"videos": [{"video_id": "L21_V001"}, {"video_id": "L21_V002"}]}
 

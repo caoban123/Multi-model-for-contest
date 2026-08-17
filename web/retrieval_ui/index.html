@@ -86,6 +86,8 @@
                 <label class="check-field"><input id="enable-objects" type="checkbox"> Objects</label>
                 <label class="check-field"><input id="enable-attributes" type="checkbox"> Attributes</label>
                 <label class="check-field"><input id="enable-metadata" type="checkbox"> Metadata</label>
+                <label class="check-field"><input id="enable-ocr" type="checkbox"> OCR text</label>
+                <label class="check-field"><input id="enable-asr" type="checkbox"> ASR speech</label>
               </div>
               <div class="structured-groups">
                 <fieldset id="object-fields" disabled>
@@ -95,6 +97,20 @@
                   <label><span>Position</span><select id="object-position"><option>any</option><option>left</option><option>center</option><option>right</option><option>top</option><option>middle</option><option>bottom</option></select></label>
                   <label><span>Minimum confidence</span><input id="object-min-confidence" type="number" min="0" max="1" step="0.1" value="0.3"></label>
                   <label><span>Constraint mode</span><select id="object-filter-mode"><option value="soft">Soft support</option><option value="hard">Hard requirement</option></select></label>
+                </fieldset>
+                <fieldset id="phase5-fields" disabled>
+                  <legend>OCR / ASR evidence · Phase 5 opt-in</legend>
+                  <label><span>OCR minimum confidence</span><input id="ocr-min-confidence" type="number" min="0" max="1" step="0.05" value="0.5"></label>
+                  <label><span>OCR mode</span><select id="ocr-filter-mode"><option value="soft">Soft support</option><option value="hard">Hard requirement</option></select></label>
+                  <label><span>ASR mode</span><select id="asr-filter-mode"><option value="soft">Soft support</option><option value="hard">Hard requirement</option></select></label>
+                </fieldset>
+                <fieldset id="phase6-fields" disabled>
+                  <legend>Query planner / reranker · Phase 6 opt-in</legend>
+                  <label class="check-field"><input id="enable-query-planner" type="checkbox"> Show local query plan</label>
+                  <label class="check-field"><input id="enable-reranker" type="checkbox"> Rerank Top-N</label>
+                  <label><span>Reranker Top-N</span><input id="reranker-top-n" type="number" min="1" max="50" value="20"></label>
+                  <button id="preview-query-plan" class="secondary-button" type="button">Preview plan</button>
+                  <div id="query-plan-preview" class="query-plan-preview">Planner disabled.</div>
                 </fieldset>
                 <fieldset id="attribute-fields" disabled>
                   <legend>Attribute evidence</legend>

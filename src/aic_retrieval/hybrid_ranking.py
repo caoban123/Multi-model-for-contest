@@ -13,11 +13,13 @@ class RrfConfig:
     weight_object: float = 0.5
     weight_attribute: float = 0.35
     weight_metadata: float = 0.3
+    weight_ocr: float = 0.6
+    weight_asr: float = 0.55
 
     def __post_init__(self) -> None:
         if self.rrf_k <= 0:
             raise ValueError("rrf_k must be positive")
-        if min(self.weight_clip, self.weight_object, self.weight_attribute, self.weight_metadata) < 0:
+        if min(self.weight_clip, self.weight_object, self.weight_attribute, self.weight_metadata, self.weight_ocr, self.weight_asr) < 0:
             raise ValueError("RRF weights must not be negative")
 
 
@@ -41,6 +43,8 @@ def frame_fusion_score(item: dict[str, Any], config: RrfConfig) -> float:
         + contribution(item.get("object_rank"), config.weight_object, config.rrf_k)
         + contribution(item.get("attribute_rank"), config.weight_attribute, config.rrf_k)
         + contribution(item.get("metadata_rank"), config.weight_metadata, config.rrf_k)
+        + contribution(item.get("ocr_rank"), config.weight_ocr, config.rrf_k)
+        + contribution(item.get("asr_rank"), config.weight_asr, config.rrf_k)
     )
 
 
@@ -91,14 +95,16 @@ def rank_video_candidates(candidate_payload: dict[str, Any], query: StructuredQu
     object_ranks = modality_video_ranks(candidates, "object_rank")
     attribute_ranks = modality_video_ranks(candidates, "attribute_rank")
     metadata_ranks = modality_video_ranks(candidates, "metadata_rank")
+    ocr_ranks = modality_video_ranks(candidates, "ocr_rank")
+    asr_ranks = modality_video_ranks(candidates, "asr_rank")
     grouped: dict[str, list[dict[str, Any]]] = {}
     for item in candidates:
         if item["keyframe_id"] is not None:
             grouped.setdefault(item["video_id"], []).append(item)
     unranked = []
     for video_id, frames in grouped.items():
-        ranks = {"clip": clip_ranks.get(video_id), "object": object_ranks.get(video_id), "attribute": attribute_ranks.get(video_id), "metadata": metadata_ranks.get(video_id)}
-        score = contribution(ranks["clip"], config.weight_clip, config.rrf_k) + contribution(ranks["object"], config.weight_object, config.rrf_k) + contribution(ranks["attribute"], config.weight_attribute, config.rrf_k) + contribution(ranks["metadata"], config.weight_metadata, config.rrf_k)
+        ranks = {"clip": clip_ranks.get(video_id), "object": object_ranks.get(video_id), "attribute": attribute_ranks.get(video_id), "metadata": metadata_ranks.get(video_id), "ocr":ocr_ranks.get(video_id), "asr":asr_ranks.get(video_id)}
+        score = contribution(ranks["clip"], config.weight_clip, config.rrf_k) + contribution(ranks["object"], config.weight_object, config.rrf_k) + contribution(ranks["attribute"], config.weight_attribute, config.rrf_k) + contribution(ranks["metadata"], config.weight_metadata, config.rrf_k) + contribution(ranks["ocr"],config.weight_ocr,config.rrf_k) + contribution(ranks["asr"],config.weight_asr,config.rrf_k)
         representative, rule = choose_representative(frames, query, config)
         ordered_frames = sorted(frames, key=lambda item: (-frame_fusion_score(item, config), item.get("clip_rank") or 10**9, item.get("object_rank") or 10**9, item.get("attribute_rank") or 10**9, item.get("metadata_rank") or 10**9, item["keyframe_id"]))
         selected_frames = [representative, *(item for item in ordered_frames if item is not representative)][:matched_frames_per_video]

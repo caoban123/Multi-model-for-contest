@@ -14,6 +14,7 @@ from aic_retrieval.object_search import ObjectSearchService
 from aic_retrieval.object_store import create_schema, load_alias_dictionary
 from aic_retrieval.retrieval_ui import RetrievalUiConfig, RetrievalUiService, parse_bool, parse_float, parse_object_position
 from aic_retrieval.search import FrameRef
+from aic_retrieval.query_planner import RuleBasedQueryPlanner
 
 
 def make_structured_service(tmp_path: Path) -> RetrievalUiService:
@@ -35,6 +36,7 @@ def make_structured_service(tmp_path: Path) -> RetrievalUiService:
     class Encoder:
         def encode_text(self,text): return np.array([1,0],dtype=np.float32)
     service.encoder=Encoder()
+    service.query_planner=RuleBasedQueryPlanner()
     return service
 
 
@@ -49,12 +51,19 @@ def test_structured_service_returns_complete_status_contract(tmp_path: Path) -> 
     assert {item["evidence"]["metadata"]["status"] for item in payload["video_results"]} == {"disabled"}
     assert all(set(item["evidence"]) >= {"clip","objects","attributes","metadata","fusion","representative_rule"} for item in payload["video_results"])
     assert all("evidence" in item for item in payload["results"])
+    assert "query_plan" not in payload and "reranker" not in payload
 
 
 def test_structured_parameter_parsers() -> None:
     assert parse_bool("true") and not parse_bool("0")
     assert parse_float("0.4",0.3)==0.4
     assert parse_object_position("left:bottom") == ("left","bottom")
+
+
+def test_query_plan_preview_is_local_and_explainable(tmp_path: Path) -> None:
+    plan=make_structured_service(tmp_path).query_plan('người cầm điện thoại, sau đó nói "xin chào"')
+    assert set(plan["recommended_modalities"]) >= {"clip","objects","asr"}
+    assert plan["temporal_hints"]
 
 
 def test_structured_route_is_opt_in_and_search_route_remains_separate(tmp_path: Path, monkeypatch) -> None:

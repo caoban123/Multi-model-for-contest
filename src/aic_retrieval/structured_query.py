@@ -36,12 +36,17 @@ class StructuredQuery:
     enable_objects: bool = False
     enable_metadata: bool = False
     enable_attributes: bool = False
+    enable_ocr: bool = False
+    enable_asr: bool = False
     clip_mode: FilterMode = "soft"
     object_constraints: tuple[ObjectConstraint, ...] = ()
     attribute_constraints: tuple[ColorAttributeConstraint, ...] = ()
     attribute_mode: FilterMode = "disabled"
     metadata_constraints: MetadataConstraints = field(default_factory=MetadataConstraints)
     metadata_mode: FilterMode = "disabled"
+    ocr_mode: FilterMode = "disabled"
+    asr_mode: FilterMode = "disabled"
+    ocr_min_confidence: float = 0.0
     clip_candidate_pool: int = 100
     fusion_method: str = "rrf"
 
@@ -49,6 +54,10 @@ class StructuredQuery:
         validate_mode(self.clip_mode)
         validate_mode(self.attribute_mode)
         validate_mode(self.metadata_mode)
+        validate_mode(self.ocr_mode)
+        validate_mode(self.asr_mode)
+        if not 0 <= self.ocr_min_confidence <= 1:
+            raise ValueError("ocr_min_confidence must be between 0 and 1")
         if self.clip_candidate_pool <= 0:
             raise ValueError("clip_candidate_pool must be positive")
         if self.fusion_method != "rrf":

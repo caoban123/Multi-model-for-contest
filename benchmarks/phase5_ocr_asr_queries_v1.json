@@ -1,0 +1,15 @@
+{
+  "version": "phase5-ocr-asr-v1.0",
+  "annotation_status": "template_requires_manual_review_on_local_L21_data",
+  "queries": [
+    {"query_id":"ocr_dev_01","modality":"ocr","category":"subtitle","split":"development","text":"thời sự","expected":[]},
+    {"query_id":"ocr_dev_02","modality":"ocr","category":"proper_name","split":"development","text":"thành phố hồ chí minh","expected":[]},
+    {"query_id":"ocr_dev_03","modality":"ocr","category":"number","split":"development","text":"19h","expected":[]},
+    {"query_id":"ocr_hold_01","modality":"ocr","category":"sign","split":"holdout","text":"samsung","expected":[]},
+    {"query_id":"ocr_hold_02","modality":"ocr","category":"price","split":"holdout","text":"125000","expected":[]},
+    {"query_id":"asr_dev_01","modality":"asr","category":"phrase","split":"development","text":"xin chào quý vị","expected":[]},
+    {"query_id":"asr_dev_02","modality":"asr","category":"location","split":"development","text":"thành phố hồ chí minh","expected":[]},
+    {"query_id":"asr_hold_01","modality":"asr","category":"proper_name","split":"holdout","text":"việt nam","expected":[]},
+    {"query_id":"asr_hold_02","modality":"asr","category":"number","split":"holdout","text":"năm 2024","expected":[]}
+  ]
+}

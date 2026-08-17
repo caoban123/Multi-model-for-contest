@@ -1,0 +1,20 @@
+{
+  "version": "phase6-lightweight-reranker-v1",
+  "status": "seed_requires_development_tuning",
+  "fusion": {
+    "rrf_k": 60,
+    "weight_clip": 1.0,
+    "weight_object": 0.5,
+    "weight_attribute": 0.35,
+    "weight_metadata": 0.3,
+    "weight_ocr": 0.6,
+    "weight_asr": 0.55
+  },
+  "config": {
+    "top_n": 20,
+    "original_score_weight": 1.0,
+    "modality_match_weight": 0.08,
+    "lexical_evidence_weight": 0.12,
+    "planner_alignment_weight": 0.06
+  }
+}

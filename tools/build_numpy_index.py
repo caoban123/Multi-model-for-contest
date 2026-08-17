@@ -24,6 +24,12 @@ def main() -> int:
 
     groups = {item.strip() for item in args.groups.split(",") if item.strip()}
     start = time.perf_counter()
+    if not Path(args.registry).is_file():
+        parser.error(
+            f"Registry not found: {args.registry}\n\nBuild it with:\n"
+            "  python tools/data_registry.py --data-root data "
+            f"--output {args.registry} --validation-output artifacts/registry/validation_report.json"
+        )
     registry = load_registry(Path(args.registry))
     index, refs = build_numpy_index(
         registry,

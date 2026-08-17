@@ -122,8 +122,10 @@ def load_numpy_index(index_dir: Path) -> tuple[np.ndarray, list[FrameRef], dict[
     vectors_path = index_dir / "vectors.npy"
     refs_path = index_dir / "refs.json"
     metadata_path = index_dir / "metadata.json"
-    if not vectors_path.exists() or not refs_path.exists():
-        raise FileNotFoundError(f"missing NumPy index files in {index_dir}")
+    missing = [path for path in (vectors_path, refs_path) if not path.is_file()]
+    if missing:
+        formatted = "\n".join(f"  {path}" for path in missing)
+        raise FileNotFoundError(f"missing NumPy index files:\n{formatted}")
 
     index = np.asarray(np.load(vectors_path, mmap_mode="r"), dtype=np.float32)
     refs_payload = json.loads(refs_path.read_text(encoding="utf-8"))

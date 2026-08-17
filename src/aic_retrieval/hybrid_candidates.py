@@ -10,6 +10,7 @@ from aic_retrieval.metadata_search import MetadataDocument, filter_metadata_docu
 from aic_retrieval.object_search import ObjectPredicate, ObjectSearchConfig, ObjectSearchService
 from aic_retrieval.search import FrameRef, search_numpy_index
 from aic_retrieval.structured_query import StructuredQuery
+from aic_retrieval.phase5_store import Phase5SearchService
 
 
 def _empty_candidate(video_id: str, keyframe_id: int | None, ref: FrameRef | None = None) -> dict[str, Any]:
@@ -20,8 +21,9 @@ def _empty_candidate(video_id: str, keyframe_id: int | None, ref: FrameRef | Non
         "fps": ref.fps if ref else None, "keyframe_path": ref.keyframe_path if ref else None,
         "clip_rank": None, "clip_score": None, "object_rank": None, "object_score": None,
         "attribute_rank": None, "attribute_score": None,
-        "metadata_rank": None, "metadata_score": None,
-        "provenance": [], "evidence": {"clip": None, "object": [], "attribute": [], "metadata": None},
+        "metadata_rank": None, "metadata_score": None, "ocr_rank": None, "ocr_score": None,
+        "asr_rank": None, "asr_score": None,
+        "provenance": [], "evidence": {"clip": None, "object": [], "attribute": [], "metadata": None, "ocr": [], "asr": []},
     }
 
 
@@ -33,10 +35,12 @@ class StructuredCandidateGenerator:
         object_service: ObjectSearchService | None,
         metadata_docs: list[MetadataDocument],
         attribute_service: ColorAttributeService | None = None,
+        phase5_service: Phase5SearchService | None = None,
     ) -> None:
         self.index, self.refs = index, refs
         self.object_service, self.metadata_docs = object_service, metadata_docs
         self.attribute_service = attribute_service
+        self.phase5_service = phase5_service
         self.ref_by_key = {(ref.video_id, ref.keyframe_id): ref for ref in refs}
         self.positions_by_video: dict[str, list[int]] = {}
         for position, ref in enumerate(refs): self.positions_by_video.setdefault(ref.video_id, []).append(position)
@@ -53,12 +57,17 @@ class StructuredCandidateGenerator:
 
     def generate(self, query: StructuredQuery, query_vector: np.ndarray | None) -> dict[str, Any]:
         candidates: dict[tuple[str, int], dict[str, Any]] = {}
+        # Preserve the Phase 4 response contract when both Phase 5 channels are
+        # disabled.  Capability-specific counters are added only for channels
+        # that actually participate in this request.
         channel_counts = {"clip_frames": 0, "object_frames": 0, "attribute_frames": 0, "metadata_videos": 0}
         hard_object_sets: list[set[tuple[str, int]]] = []
         hard_attribute_sets: list[set[tuple[str, int]]] = []
         hard_clip_keys: set[tuple[str, int]] | None = None
         unknown_object_keys: set[tuple[str, int]] = set()
         unknown_attribute_keys: set[tuple[str, int]] = set()
+        hard_ocr_keys: set[tuple[str, int]] | None = None
+        hard_asr_keys: set[tuple[str, int]] | None = None
 
         if query.enable_clip and query.clip_mode != "disabled":
             if query_vector is None or not query.visual_text.strip():
@@ -147,6 +156,29 @@ class StructuredCandidateGenerator:
                 representative["provenance"].append("metadata")
                 representative["evidence"]["metadata"] = metadata
 
+        for modality, enabled, mode in (("ocr", query.enable_ocr, query.ocr_mode), ("asr", query.enable_asr, query.asr_mode)):
+            if not enabled or mode == "disabled":
+                continue
+            count_key = "ocr_frames" if modality == "ocr" else "asr_segments"
+            channel_counts[count_key] = 0
+            if self.phase5_service is None or not self.phase5_service.available:
+                raise ValueError(f"{modality} modality enabled but Phase 5 store is not configured")
+            results = self.phase5_service.search_ocr(query.visual_text, query.clip_candidate_pool, query.ocr_min_confidence) if modality == "ocr" else self.phase5_service.search_asr(query.visual_text, query.clip_candidate_pool)
+            channel_counts[count_key] = len(results)
+            matched: set[tuple[str, int]] = set()
+            for result in results:
+                if result.get("keyframe_id") is None:
+                    continue
+                key=(result["video_id"],result["keyframe_id"]); matched.add(key)
+                item=candidates.setdefault(key,_empty_candidate(result["video_id"],result["keyframe_id"],self.ref_by_key.get(key)))
+                rank_field=f"{modality}_rank"; score_field=f"{modality}_score"
+                if item[rank_field] is None or result[rank_field] < item[rank_field]: item.update({rank_field:result[rank_field],score_field:result[score_field]})
+                if modality not in item["provenance"]: item["provenance"].append(modality)
+                item["evidence"][modality].append(result)
+            if mode == "hard":
+                if modality == "ocr": hard_ocr_keys = matched
+                else: hard_asr_keys = matched
+
         hard_metadata_videos = {item["video_id"] for item in metadata_results} if query.enable_metadata and query.metadata_mode == "hard" else None
         if hard_clip_keys is not None:
             candidates = {key: value for key, value in candidates.items() if key in hard_clip_keys}
@@ -154,6 +186,8 @@ class StructuredCandidateGenerator:
             candidates = {key: value for key, value in candidates.items() if key in matched}
         for matched in hard_attribute_sets:
             candidates = {key: value for key, value in candidates.items() if key in matched}
+        for matched in (hard_ocr_keys, hard_asr_keys):
+            if matched is not None: candidates = {key:value for key,value in candidates.items() if key in matched}
         if hard_metadata_videos is not None:
             candidates = {key: value for key, value in candidates.items() if value["video_id"] in hard_metadata_videos}
         ordered = sorted(candidates.values(), key=lambda item: (item["clip_rank"] is None, item["clip_rank"] or 10**9, item["object_rank"] is None, item["object_rank"] or 10**9, item["attribute_rank"] is None, item["attribute_rank"] or 10**9, item["metadata_rank"] is None, item["metadata_rank"] or 10**9, item["video_id"], item["keyframe_id"] if item["keyframe_id"] is not None else 10**9))

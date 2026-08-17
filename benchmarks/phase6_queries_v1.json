@@ -1,0 +1,12 @@
+{
+  "version": "phase6-planner-reranker-v1.0",
+  "annotation_status": "template_requires_frozen_phase5_candidate_runs_and_manual_judgement",
+  "queries": [
+    {"query_id":"p6_dev_01","split":"development","text":"người cầm điện thoại","expected_video_ids":[],"baseline_results":[]},
+    {"query_id":"p6_dev_02","split":"development","text":"biển hiệu chữ Samsung","expected_video_ids":[],"baseline_results":[]},
+    {"query_id":"p6_dev_03","split":"development","text":"người nói xin chào quý vị","expected_video_ids":[],"baseline_results":[]},
+    {"query_id":"p6_hold_01","split":"holdout","text":"người mặc áo đỏ","expected_video_ids":[],"baseline_results":[]},
+    {"query_id":"p6_hold_02","split":"holdout","text":"sự kiện trước và sau đó","expected_video_ids":[],"baseline_results":[]},
+    {"query_id":"p6_hold_03","split":"holdout","text":"video của kênh Tuổi Trẻ","expected_video_ids":[],"baseline_results":[]}
+  ]
+}
