@@ -32,6 +32,9 @@ from aic_retrieval.translation import ExternalTranslator, TranslationConfig
 from aic_retrieval.phase5_store import Phase5SearchService
 from aic_retrieval.query_planner import RuleBasedQueryPlanner
 from aic_retrieval.reranking import RerankerConfig, load_reranker_config, rerank_video_results, reranker_metadata, with_top_n
+from aic_retrieval.qa_schema import AvailabilityStatus, EvidenceModality, QaRequest, ReviewDecision
+from aic_retrieval.qa_workflow import QaWorkflow, jsonable, state_payload
+from aic_retrieval.qa_store import QaStore
 
 
 DEFAULT_TOP_K_VIDEOS = 12
@@ -54,12 +57,14 @@ class RetrievalUiConfig:
     clip_model_id: str = DEFAULT_CLIP_MODEL_ID
     clip_cache_dir: Path | None = None
     clip_local_files_only: bool = False
+    require_keyframes: bool = False
     allow_stale_index: bool = False
     translation: TranslationConfig | None = None
     object_store_path: Path | None = None
     object_aliases_path: Path | None = None
     phase5_store_path: Path | None = None
     phase6_config_path: Path | None = None
+    qa_store_path: Path | None = None
 
 
 class RetrievalUiService:
@@ -73,7 +78,7 @@ class RetrievalUiService:
             self.refs,
             self.index_metadata,
             requested_groups=config.groups,
-            require_keyframes=False,
+            require_keyframes=config.require_keyframes,
             registry_path=config.registry_path,
             repo_root=config.repo_root,
             allow_stale_index=config.allow_stale_index,
@@ -84,7 +89,14 @@ class RetrievalUiService:
             self.refs_by_video.setdefault(ref.video_id, []).append(ref)
         for video_refs in self.refs_by_video.values():
             video_refs.sort(key=lambda ref: (ref.pts_time, ref.keyframe_id))
-        self.metadata_by_video: dict[str, dict[str, Any]] = {}
+        self.metadata_by_video = {
+            doc.video_id: {
+                "title": doc.title, "author": doc.author, "channel_id": doc.channel_id,
+                "publish_date": doc.publish_date, "duration": doc.duration, "keywords": doc.keywords,
+                "description": doc.description, "watch_url": doc.watch_url,
+            }
+            for doc in self.metadata_docs
+        }
         self.encoder: ClipTextEncoder | None = None
         self.translator = ExternalTranslator(config.translation or TranslationConfig())
         self.object_service: ObjectSearchService | None = None
@@ -98,6 +110,7 @@ class RetrievalUiService:
         phase6_payload = json.loads(config.phase6_config_path.read_text(encoding="utf-8")) if config.phase6_config_path and config.phase6_config_path.is_file() else {}
         self.rrf_config = RrfConfig(**phase6_payload.get("fusion", {}))
         self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs, self.attribute_service, self.phase5_service)
+        self.qa_workflow = QaWorkflow(store=QaStore(config.qa_store_path) if config.qa_store_path else None)
 
     def search(
         self,
@@ -301,6 +314,84 @@ class RetrievalUiService:
 
     def query_plan(self, query: str) -> dict[str, Any]:
         return self.query_planner.plan(query).to_dict()
+
+    def qa_prepare(
+        self,
+        query_id: str,
+        event_query: str,
+        question: str,
+        selected_video_id: str | None = None,
+        selected_frame_id: int | None = None,
+    ) -> dict[str, Any]:
+        request = QaRequest(query_id, event_query, question, selected_video_id, selected_frame_id)
+        response = self._qa_selected_response(request) if selected_video_id else self.search(event_query, top_k=12, candidate_pool=40)
+        response = {
+            **response,
+            "index_schema_version": self.index_metadata.get("index_schema_version"),
+            "index_fingerprint": self.index_metadata.get("feature_source_fingerprint"),
+            "phase5_store_version": "phase5-store-v1" if getattr(self, "phase5_service", None) and self.phase5_service.available else None,
+            "phase6_config_version": self.reranker_config.__class__.__name__,
+        }
+        state = self.qa_workflow.prepare(
+            request,
+            response,
+            metadata_by_video=self.metadata_by_video,
+            modality_availability=self.qa_modality_availability(),
+            max_evidence_per_modality=8,
+        )
+        return self.qa_workflow.payload(state)
+
+    def qa_draft_answer(self, session_id: str, selected_evidence_ids: tuple[str, ...]) -> dict[str, Any]:
+        state, draft = self.qa_workflow.draft(session_id, selected_evidence_ids)
+        return {**self.qa_workflow.payload(state), "answer_draft": jsonable(draft)}
+
+    def qa_review(
+        self,
+        session_id: str,
+        draft_id: str,
+        decision: str,
+        final_answer: str | None,
+        selected_evidence_ids: tuple[str, ...],
+        reviewer: str,
+    ) -> dict[str, Any]:
+        state, review = self.qa_workflow.review(
+            session_id, draft_id, ReviewDecision(decision), final_answer, selected_evidence_ids, reviewer,
+        )
+        return {**self.qa_workflow.payload(state), "review": jsonable(review)}
+
+    def qa_session(self, session_id: str) -> dict[str, Any]:
+        return self.qa_workflow.payload(self.qa_workflow.get(session_id))
+
+    def qa_export(self, session_id: str, review_id: str) -> dict[str, Any]:
+        return {"export_record": jsonable(self.qa_workflow.create_export(session_id, review_id))}
+
+    def qa_sessions(self) -> dict[str, Any]:
+        return {"sessions": self.qa_workflow.list_sessions(), "persistence": "sqlite" if self.qa_workflow.store else "memory_until_p7_5"}
+
+    def qa_modality_availability(self) -> dict[EvidenceModality, AvailabilityStatus]:
+        return {
+            EvidenceModality.KEYFRAME: AvailabilityStatus.AVAILABLE if self.refs else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.CLIP: AvailabilityStatus.AVAILABLE if len(self.index) else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.OBJECT: AvailabilityStatus.AVAILABLE if self.object_service is not None else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.METADATA: AvailabilityStatus.AVAILABLE if self.metadata_docs else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.OCR: AvailabilityStatus.AVAILABLE if getattr(self, "phase5_service", None) and self.phase5_service.available else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.ASR: AvailabilityStatus.AVAILABLE if getattr(self, "phase5_service", None) and self.phase5_service.available else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.ATTRIBUTE: AvailabilityStatus.AVAILABLE if self.attribute_service.available else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.TEMPORAL: AvailabilityStatus.AVAILABLE if self.refs_by_video else AvailabilityStatus.UNAVAILABLE,
+        }
+
+    def _qa_selected_response(self, request: QaRequest) -> dict[str, Any]:
+        refs = self.refs_by_video.get(request.selected_video_id or "", [])
+        ref = next((item for item in refs if request.selected_frame_id is None or item.keyframe_id == request.selected_frame_id), None)
+        if ref is None:
+            raise ValueError("selected video/frame is not present in the current index")
+        frame = asdict(ref)
+        frame["evidence"] = {"object": [], "attribute": [], "ocr": [], "asr": []}
+        return {
+            "mode": "selected_candidate", "query": request.event_query, "groups": sorted(self.config.groups),
+            "top_k": 1, "candidate_pool": 1,
+            "video_results": [{"video_id": ref.video_id, "rank": 1, "frames": [frame]}],
+        }
 
     def structured_evidence(self, result: dict[str, Any], query: StructuredQuery, fusion_config: dict[str, Any]) -> dict[str, Any]:
         ranks = result["modality_ranks"]
@@ -519,6 +610,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "asr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.available),
                         "query_planner_available": True,
                         "reranker_available": True,
+                        "qa_available": hasattr(service, "qa_prepare"),
+                        "qa_persistence": "sqlite" if getattr(service, "qa_workflow", None) and service.qa_workflow.store else "memory_until_p7_5",
                     }
                 )
             elif parsed.path == "/api/search":
@@ -533,12 +626,50 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._handle_translate(parsed.query)
             elif parsed.path == "/api/query-plan":
                 self._handle_query_plan(parsed.query)
+            elif parsed.path.startswith("/api/qa/session/"):
+                self._handle_qa_session(parsed.path.removeprefix("/api/qa/session/"))
+            elif parsed.path == "/api/qa/sessions":
+                self._handle_qa_sessions()
             elif parsed.path == "/keyframe":
                 self._serve_keyframe(parsed.query)
             elif parsed.path == "/video":
                 self._serve_video(parsed.query)
             else:
                 self._error(HTTPStatus.NOT_FOUND, "not found")
+
+        def do_POST(self) -> None:
+            try:
+                payload = self._request_json()
+                if self.path == "/api/qa/prepare":
+                    result = service.qa_prepare(
+                        str(payload.get("query_id") or f"qa-{int(time.time() * 1000)}"),
+                        str(payload.get("event_query") or ""),
+                        str(payload.get("question") or ""),
+                        str(payload["selected_video_id"]) if payload.get("selected_video_id") else None,
+                        int(payload["selected_frame_id"]) if payload.get("selected_frame_id") is not None else None,
+                    )
+                elif self.path == "/api/qa/draft-answer":
+                    result = service.qa_draft_answer(
+                        str(payload.get("session_id") or ""),
+                        tuple(str(item) for item in payload.get("selected_evidence_ids", []) if str(item)),
+                    )
+                elif self.path == "/api/qa/review":
+                    result = service.qa_review(
+                        str(payload.get("session_id") or ""), str(payload.get("draft_id") or ""),
+                        str(payload.get("decision") or ""),
+                        str(payload["final_answer"]) if payload.get("final_answer") is not None else None,
+                        tuple(str(item) for item in payload.get("selected_evidence_ids", []) if str(item)),
+                        str(payload.get("reviewer") or "local-reviewer"),
+                    )
+                elif self.path == "/api/qa/export":
+                    result = service.qa_export(str(payload.get("session_id") or ""), str(payload.get("review_id") or ""))
+                else:
+                    self._error(HTTPStatus.NOT_FOUND, "not found")
+                    return
+            except Exception as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._json(result)
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -620,6 +751,20 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             params = parse_qs(query_string)
             try:
                 payload = service.query_plan(first(params, "q"))
+            except Exception as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
+            self._json(payload)
+
+        def _handle_qa_session(self, session_id: str) -> None:
+            try:
+                payload = service.qa_session(session_id)
+            except Exception as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
+            self._json(payload)
+
+        def _handle_qa_sessions(self) -> None:
+            try:
+                payload = service.qa_sessions()
             except Exception as exc:
                 self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
             self._json(payload)
@@ -744,6 +889,20 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _request_json(self) -> dict[str, Any]:
+            content_length = parse_int(self.headers.get("Content-Length", "0"), 0)
+            if content_length <= 0:
+                raise ValueError("JSON request body is required")
+            if content_length > 1_000_000:
+                raise ValueError("JSON request body is too large")
+            try:
+                payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError("request body must be valid UTF-8 JSON") from exc
+            if not isinstance(payload, dict):
+                raise ValueError("JSON request must be an object")
+            return payload
 
         def _error(self, status: HTTPStatus, message: str) -> None:
             body = json.dumps({"ok": False, "error": message}, ensure_ascii=False).encode("utf-8")

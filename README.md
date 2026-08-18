@@ -458,3 +458,22 @@ Nếu `artifacts/` bị xóa, dùng `python tools/prepare_phase5.py --data-root 
 Phase 6 bổ sung rule-based query decomposition chạy offline, query variants có thể xem trong UI và lightweight reranker chỉ áp dụng trên Top-N candidate. Cả planner và reranker đều opt-in; khi tắt, structured retrieval giữ đường baseline Phase 5. Hướng dẫn test tự động, test tay và benchmark before/after nằm tại [`docs/PHASE6_TESTING.md`](docs/PHASE6_TESTING.md).
 
 Reranker seed config nằm tại `configs/phase6_reranker_v1.json`. Dùng `tools/phase6_tune.py` chỉ trên development labels để sinh config đã tune, sau đó khóa cùng config cho holdout và UI bằng `--phase6-config`.
+
+## Phase 7 — Evidence-Grounded Q&A
+
+Phase 7 tạo workflow Q&A có kiểm soát: event query + question → retrieval → evidence pack → answer draft → normalization preview → human review → append-only local audit log. Đây không phải chatbot tự do: không evidence thì không confirm; không OCR/ASR store thì không tạo claim OCR/speech; không có human confirmation thì không có internal export record. LVLM chưa được triển khai và vẫn bị tắt.
+
+Khởi động UI cùng local Q&A store:
+
+```powershell
+python tools\retrieval_ui.py --qa-store artifacts\qa\phase7_qa.sqlite3
+```
+
+Mở UI, dùng phần **Q&A workspace**, chọn evidence, tạo draft và xác nhận thủ công. Internal export chỉ khả dụng sau review `confirmed` hoặc `edited` với evidence frame-level được chọn. Chi tiết test và benchmark: [`docs/PHASE7_TESTING.md`](docs/PHASE7_TESTING.md).
+
+```powershell
+python -m pytest tests\test_qa_schema.py tests\test_qa_evidence.py tests\test_qa_question_router.py tests\test_qa_answering.py tests\test_qa_normalization.py tests\test_qa_confidence.py tests\test_qa_store.py tests\test_qa_workflow.py tests\test_qa_api.py tests\test_qa_ui_static.py tests\test_qa_benchmark.py -q
+python tools\phase7_benchmark.py --queries benchmarks\phase7_qa_queries_v1.json --split development --qa-store artifacts\qa\phase7_qa.sqlite3 --output artifacts\benchmarks\phase7\development.json
+```
+
+Khi benchmark template chưa được chấm tay, quality metrics sẽ là `null/unavailable`; đây là behavior đúng, không phải metric 0.

@@ -164,6 +164,27 @@
           </section>
         </aside>
       </section>
+
+      <section class="qa-workspace" aria-labelledby="qa-heading">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Phase 7 · evidence-grounded</span>
+            <h2 id="qa-heading">Q&amp;A workspace</h2>
+            <p class="qa-note">Answers are proposals only. Select source evidence and confirm manually before an internal record can be exported.</p>
+          </div>
+        </div>
+        <form id="qa-form" class="qa-form">
+          <label><span>Event query</span><input id="qa-event-query" required placeholder="một người đứng cạnh biển hiệu"></label>
+          <label><span>Question</span><input id="qa-question" required placeholder="Biển hiệu ghi gì?"></label>
+          <button id="qa-prepare-button" class="search-button" type="submit">Prepare evidence</button>
+        </form>
+        <div id="qa-status" class="qa-status" aria-live="polite">Prepare a Q&amp;A request to inspect candidate evidence.</div>
+        <div class="qa-columns">
+          <section><h3>Candidate videos</h3><div id="qa-candidates" class="qa-list"></div></section>
+          <section><h3>Evidence selection</h3><div id="qa-evidence" class="qa-list"></div><button id="qa-draft-button" class="secondary-button" type="button" disabled>Draft answer from selected evidence</button></section>
+          <section><h3>Answer review</h3><div id="qa-answer" class="qa-answer">No answer draft.</div><label><span>Final answer</span><input id="qa-final-answer" disabled></label><div class="qa-actions"><button id="qa-save-draft-button" class="secondary-button" type="button" disabled>Save draft</button><button id="qa-confirm-button" class="search-button" type="button" disabled>Confirm</button><button id="qa-reject-button" class="secondary-button" type="button" disabled>Reject</button><button id="qa-export-button" class="secondary-button" type="button" disabled>Export confirmed record</button></div><h3>Session history</h3><div id="qa-history" class="qa-list"></div></section>
+        </div>
+      </section>
     </main>
 
     <template id="result-template">

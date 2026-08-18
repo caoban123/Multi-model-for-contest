@@ -61,6 +61,21 @@ const videoPlayer = document.querySelector("#video-player");
 const videoDialogTitle = document.querySelector("#video-dialog-title");
 const videoDialogMeta = document.querySelector("#video-dialog-meta");
 const closeVideoButton = document.querySelector("#close-video-button");
+const qaForm = document.querySelector("#qa-form");
+const qaEventQueryInput = document.querySelector("#qa-event-query");
+const qaQuestionInput = document.querySelector("#qa-question");
+const qaPrepareButton = document.querySelector("#qa-prepare-button");
+const qaStatusEl = document.querySelector("#qa-status");
+const qaCandidatesEl = document.querySelector("#qa-candidates");
+const qaEvidenceEl = document.querySelector("#qa-evidence");
+const qaDraftButton = document.querySelector("#qa-draft-button");
+const qaAnswerEl = document.querySelector("#qa-answer");
+const qaFinalAnswerInput = document.querySelector("#qa-final-answer");
+const qaSaveDraftButton = document.querySelector("#qa-save-draft-button");
+const qaConfirmButton = document.querySelector("#qa-confirm-button");
+const qaRejectButton = document.querySelector("#qa-reject-button");
+const qaExportButton = document.querySelector("#qa-export-button");
+const qaHistoryEl = document.querySelector("#qa-history");
 let currentPayload = null;
 let reviewState = new Map();
 let activeMode = "visual";
@@ -69,6 +84,9 @@ let structuredSearchAvailable = false;
 let attributeSearchAvailable = false;
 let ocrSearchAvailable = false;
 let asrSearchAvailable = false;
+let qaPayload = null;
+let qaDraft = null;
+let qaReview = null;
 const STORAGE_KEYS = {
   history: "aic_retrieval_history_v1",
   pins: "aic_retrieval_pins_v1",
@@ -83,6 +101,168 @@ async function fetchJson(url) {
     throw new Error(payload.error || "Request failed");
   }
   return payload;
+}
+
+async function postJson(url, payload) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Request failed");
+  return result;
+}
+
+function qaSelectedEvidenceIds() {
+  return [...qaEvidenceEl.querySelectorAll("input[data-qa-evidence]:checked")].map((input) => input.dataset.qaEvidence);
+}
+
+function setQaStatus(message, isError = false) {
+  qaStatusEl.textContent = message;
+  qaStatusEl.classList.toggle("error", isError);
+}
+
+function renderQaPayload(payload) {
+  qaPayload = payload;
+  const pack = payload.evidence_pack || {};
+  const candidates = pack.candidates || [];
+  qaCandidatesEl.replaceChildren();
+  for (const candidate of candidates) {
+    const item = document.createElement("div");
+    item.className = "qa-item";
+    item.textContent = `${candidate.video_id || "Unknown video"} · rank ${candidate.rank ?? "-"}`;
+    qaCandidatesEl.appendChild(item);
+  }
+  if (!candidates.length) qaCandidatesEl.textContent = "No candidate video was retrieved.";
+  qaEvidenceEl.replaceChildren();
+  for (const evidence of pack.evidence_refs || []) {
+    const label = document.createElement("label");
+    label.className = "qa-evidence-item";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.dataset.qaEvidence = evidence.evidence_id;
+    input.addEventListener("change", updateQaControls);
+    const payloadText = evidence.payload?.matched_text || evidence.payload?.text_raw || evidence.payload?.text || evidence.payload?.value || evidence.payload?.title || "source evidence";
+    const position = evidence.keyframe_id === null || evidence.keyframe_id === undefined ? "video level" : `keyframe ${evidence.keyframe_id}`;
+    label.append(input, document.createTextNode(` ${evidence.modality} · ${evidence.video_id} · ${position} · ${payloadText}`));
+    qaEvidenceEl.appendChild(label);
+  }
+  if (!(pack.evidence_refs || []).length) qaEvidenceEl.textContent = "No source-backed evidence was available.";
+  const availability = Object.entries(pack.modality_availability || {}).map(([modality, state]) => `${modality}: ${state}`).join(" · ");
+  setQaStatus(`Route: ${payload.question_route?.question_type || "UNKNOWN"}. ${availability || "No modalities available."}`);
+  qaDraft = null;
+  qaReview = null;
+  qaAnswerEl.textContent = "Select evidence, then create a proposal.";
+  qaFinalAnswerInput.value = "";
+  qaFinalAnswerInput.disabled = true;
+  updateQaControls();
+}
+
+function renderQaDraft(payload) {
+  qaPayload = payload;
+  qaDraft = payload.answer_draft;
+  const draft = qaDraft || {};
+  qaAnswerEl.replaceChildren();
+  const fields = [
+    ["Proposed", draft.raw_answer || "No supported answer"],
+    ["Normalized", draft.normalized_answer || "-"],
+    ["Alternatives", (draft.alternative_answers || []).join(" · ") || "-"],
+    ["State", draft.confidence_state || "-"],
+    ["Warnings", (draft.warnings || []).join(" · ") || "-"],
+  ];
+  for (const [label, value] of fields) {
+    const row = document.createElement("p");
+    row.textContent = `${label}: ${value}`;
+    qaAnswerEl.appendChild(row);
+  }
+  for (const id of draft.evidence_refs || []) {
+    const input = qaEvidenceEl.querySelector(`input[data-qa-evidence="${CSS.escape(id)}"]`);
+    if (input) input.checked = true;
+  }
+  qaFinalAnswerInput.value = draft.raw_answer || "";
+  qaFinalAnswerInput.disabled = !draft.raw_answer;
+  setQaStatus(draft.raw_answer ? "Review the proposal and selected evidence before confirming." : "No answer was proposed because required evidence is unavailable or insufficient.");
+  updateQaControls();
+}
+
+function renderQaHistory(payload) {
+  qaHistoryEl.replaceChildren();
+  for (const session of payload.sessions || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary-button small-button";
+    button.textContent = `${session.query_id} · ${session.question}`;
+    button.addEventListener("click", async () => {
+      try {
+        const reopened = await fetchJson(`/api/qa/session/${encodeURIComponent(session.session_id)}`);
+        renderQaPayload(reopened);
+        const drafts = reopened.drafts || [];
+        if (drafts.length) renderQaDraft({ ...reopened, answer_draft: drafts[drafts.length - 1] });
+        setQaStatus(`Reopened ${session.session_id}.`);
+      } catch (error) { setQaStatus(error.message, true); }
+    });
+    qaHistoryEl.appendChild(button);
+  }
+  if (!(payload.sessions || []).length) qaHistoryEl.textContent = "No persisted Q&A sessions yet.";
+}
+
+async function refreshQaHistory() {
+  try { renderQaHistory(await fetchJson("/api/qa/sessions")); } catch { /* Q&A persistence may be disabled in a test server. */ }
+}
+
+function updateQaControls() {
+  const hasSelection = qaSelectedEvidenceIds().length > 0;
+  qaDraftButton.disabled = !qaPayload || !hasSelection;
+  const canReview = Boolean(qaDraft?.raw_answer) && hasSelection && !["UNSUPPORTED", "NEEDS_EVIDENCE"].includes(qaDraft?.confidence_state);
+  qaSaveDraftButton.disabled = !qaDraft;
+  qaConfirmButton.disabled = !canReview;
+  qaRejectButton.disabled = !qaDraft;
+  qaExportButton.disabled = !qaReview || !["confirmed", "edited"].includes(qaReview.decision);
+}
+
+async function prepareQa() {
+  qaPrepareButton.disabled = true;
+  try {
+    const payload = await postJson("/api/qa/prepare", { event_query: qaEventQueryInput.value.trim(), question: qaQuestionInput.value.trim() });
+    renderQaPayload(payload);
+    refreshQaHistory();
+  } catch (error) {
+    setQaStatus(error.message, true);
+  } finally {
+    qaPrepareButton.disabled = false;
+  }
+}
+
+async function draftQaAnswer() {
+  try {
+    const payload = await postJson("/api/qa/draft-answer", { session_id: qaPayload.session.session_id, selected_evidence_ids: qaSelectedEvidenceIds() });
+    renderQaDraft(payload);
+  } catch (error) {
+    setQaStatus(error.message, true);
+  }
+}
+
+async function reviewQa(decision) {
+  try {
+    const finalAnswer = qaFinalAnswerInput.value.trim();
+    const actualDecision = decision === "confirmed" && finalAnswer !== qaDraft.raw_answer ? "edited" : decision;
+    const payload = await postJson("/api/qa/review", { session_id: qaPayload.session.session_id, draft_id: qaDraft.draft_id, decision: actualDecision, final_answer: finalAnswer || null, selected_evidence_ids: qaSelectedEvidenceIds(), reviewer: "local-ui-reviewer" });
+    qaReview = payload.review;
+    setQaStatus(`Review saved: ${payload.review.decision}.`);
+    refreshQaHistory();
+    updateQaControls();
+  } catch (error) {
+    setQaStatus(error.message, true);
+  }
+}
+
+async function exportQaRecord() {
+  try {
+    const payload = await postJson("/api/qa/export", { session_id: qaPayload.session.session_id, review_id: qaReview.review_id });
+    setQaStatus(`Internal export record created: ${payload.export_record.export_id}.`);
+    qaExportButton.disabled = true;
+  } catch (error) { setQaStatus(error.message, true); }
 }
 
 function setStatus(message, isError = false) {
@@ -230,6 +410,14 @@ function updateStructuredControls() {
     ? "Structured mode is experimental. Turning it off keeps the Phase 3 CLIP search path unchanged."
     : "Structured mode is experimental. Build local evidence stores or install image support before enabling extra channels.";
 }
+
+qaForm.addEventListener("submit", (event) => { event.preventDefault(); prepareQa(); });
+qaDraftButton.addEventListener("click", draftQaAnswer);
+qaSaveDraftButton.addEventListener("click", () => setQaStatus("Draft is saved in the active Q&A session; SQLite persistence is used when configured."));
+qaConfirmButton.addEventListener("click", () => reviewQa("confirmed"));
+qaRejectButton.addEventListener("click", () => reviewQa("rejected"));
+qaExportButton.addEventListener("click", exportQaRecord);
+qaFinalAnswerInput.addEventListener("input", updateQaControls);
 
 function applyDebugPreset() {
   const preset = debugModeInput.value;
@@ -1337,3 +1525,4 @@ renderHistory();
 updateStructuredControls();
 renderEmptyResults("Ready to retrieve", "Enter a query above to explore ranked video moments.");
 loadHealth();
+refreshQaHistory();

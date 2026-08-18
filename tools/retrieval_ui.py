@@ -37,10 +37,16 @@ def main() -> int:
         default_p5 = ROOT / "artifacts" / "phase5" / "phase5_store.sqlite"
     parser.add_argument("--phase5-store", type=Path, default=default_p5)
     parser.add_argument("--phase6-config", type=Path, default=ROOT / "configs" / "phase6_reranker_v1.json")
+    parser.add_argument("--qa-store", type=Path, default=ROOT / "artifacts" / "qa" / "phase7_qa.sqlite3")
     parser.add_argument("--groups", default="L21")
     parser.add_argument("--clip-model-id", default=os.environ.get("AIC_CLIP_MODEL_ID", DEFAULT_CLIP_MODEL_ID))
     parser.add_argument("--clip-cache-dir", type=Path, default=Path(os.environ["AIC_CLIP_CACHE_DIR"]) if os.environ.get("AIC_CLIP_CACHE_DIR") else None)
     parser.add_argument("--clip-local-files-only", action="store_true")
+    parser.add_argument(
+        "--require-keyframes",
+        action="store_true",
+        help="Require local keyframes and validate against an index built with --require-keyframes.",
+    )
     parser.add_argument("--translation-provider", choices=["gemini", "openai-compatible"], default=os.environ.get("AIC_TRANSLATION_PROVIDER", "gemini"))
     parser.add_argument("--translation-api-url", default=os.environ.get("AIC_TRANSLATION_API_URL"))
     parser.add_argument("--translation-model", default=os.environ.get("AIC_TRANSLATION_MODEL"))
@@ -63,6 +69,7 @@ def main() -> int:
         clip_model_id=args.clip_model_id,
         clip_cache_dir=args.clip_cache_dir,
         clip_local_files_only=args.clip_local_files_only,
+        require_keyframes=args.require_keyframes,
         allow_stale_index=args.allow_stale_index,
         translation=TranslationConfig(
             api_key=os.environ.get("AIC_TRANSLATION_API_KEY"),
@@ -75,6 +82,7 @@ def main() -> int:
         object_aliases_path=args.object_aliases,
         phase5_store_path=args.phase5_store,
         phase6_config_path=args.phase6_config,
+        qa_store_path=args.qa_store,
     )
     try:
         server = run_server(config, host=args.host, port=args.port)

@@ -52,6 +52,8 @@ def scan_data_root(data_root: Path) -> list[VideoAsset]:
     objects_dir = data_root / "objects"
     keyframes_dir = data_root / "keyframes"
     videos_dir = data_root / "videos"
+    if not videos_dir.is_dir():
+        videos_dir = data_root / "video"
 
     video_ids = set()
     video_ids.update(_ids_from_files(feature_dir, "*.npy"))

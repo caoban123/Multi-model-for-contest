@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -58,6 +60,19 @@ def get_keyframe_dirs(keyframes_dir: Path, groups: set[str]) -> dict[str, Path]:
             if group in groups:
                 kf_map[item.name] = item
     return kf_map
+
+
+def normalize_bbox(points: Any, width: int, height: int) -> tuple[tuple[float, float], ...]:
+    if width <= 0 or height <= 0 or not isinstance(points, (list, tuple)) or len(points) != 4:
+        raise ValueError("OCR bbox must contain four image-space points")
+    normalized = []
+    for point in points:
+        if not isinstance(point, (list, tuple)) or len(point) != 2:
+            raise ValueError("OCR bbox point must contain x and y")
+        x = max(0.0, min(1.0, float(point[0]) / width))
+        y = max(0.0, min(1.0, float(point[1]) / height))
+        normalized.append((x, y))
+    return tuple(normalized)
 
 
 def run_asr_extraction(
@@ -186,7 +201,9 @@ def run_ocr_extraction(
     if engine_name in {"auto", "paddleocr"}:
         try:
             from paddleocr import PaddleOCR
-            ocr_predictor = PaddleOCR(use_angle_cls=False, lang="vi", show_log=False)
+            # `show_log` was removed in PaddleOCR 3.x; keep to arguments
+            # supported by both the installed runtime and older releases.
+            ocr_predictor = PaddleOCR(use_angle_cls=False, lang="vi")
             print("[OCR] Using PaddleOCR (lang='vi')", flush=True)
         except ImportError:
             print("[OCR] paddleocr not installed.", flush=True)
@@ -222,6 +239,8 @@ def run_ocr_extraction(
 
                 if ocr_predictor is not None:
                     try:
+                        with Image.open(img_path) as image:
+                            image_width, image_height = image.size
                         if hasattr(ocr_predictor, "ocr"):
                             result = ocr_predictor.ocr(str(img_path), cls=False)
                             if result and result[0]:
@@ -231,17 +250,20 @@ def run_ocr_extraction(
                                         OcrDetection(
                                             text=text.strip(),
                                             confidence=round(float(conf), 3),
-                                            bbox=((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+                                            bbox=normalize_bbox(bbox_raw, image_width, image_height),
                                         )
                                     )
                         elif hasattr(ocr_predictor, "readtext"):
                             result = ocr_predictor.readtext(str(img_path))
                             for bbox_raw, text, conf in result:
+                                text = text.strip()
+                                if not text:
+                                    continue
                                 detections.append(
                                     OcrDetection(
-                                        text=text.strip(),
+                                        text=text,
                                         confidence=round(float(conf), 3),
-                                        bbox=((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)),
+                                        bbox=normalize_bbox(bbox_raw, image_width, image_height),
                                     )
                                 )
                     except Exception as exc:
@@ -301,7 +323,12 @@ def main() -> int:
     groups = {g.strip() for g in args.groups.split(",") if g.strip()}
 
     print(f"=== Starting Phase 5 Evidence Extraction for groups: {sorted(groups)} ===", flush=True)
-    video_map = get_video_files(args.data_root / "videos", groups)
+    # Datasets in this repository use `video/`; retain `videos/` support for
+    # exports that follow the older plural directory convention.
+    videos_dir = args.data_root / "videos"
+    if not videos_dir.is_dir():
+        videos_dir = args.data_root / "video"
+    video_map = get_video_files(videos_dir, groups)
     kf_map = get_keyframe_dirs(args.data_root / "keyframes", groups)
 
     print(f"Found {len(video_map)} video files and {len(kf_map)} keyframe directories.", flush=True)

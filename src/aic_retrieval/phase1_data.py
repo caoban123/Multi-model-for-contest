@@ -61,9 +61,11 @@ def preflight_phase1_data(
         )
     )
     videos_dir = data_root / "videos"
+    if not videos_dir.is_dir():
+        videos_dir = data_root / "video"
     checks.append(
         PreflightCheck(
-            name="directory:videos",
+            name=f"directory:{videos_dir.name}",
             status="OK" if videos_dir.is_dir() else "WARNING",
             detail=str(videos_dir) if videos_dir.is_dir() else "Raw videos are not required for the Phase-1 baseline.",
         )

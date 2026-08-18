@@ -1,0 +1,66 @@
+{
+  "version": "phase7-qa-v1.0",
+  "annotation_status": "template_requires_manual_review_on_local_L21_data",
+  "queries": [
+    {
+      "query_id": "p7_dev_01",
+      "split": "development",
+      "event_query_vi": "một người đứng cạnh biển hiệu",
+      "event_query_en": "a person standing near a sign",
+      "question_vi": "Biển hiệu ghi gì?",
+      "question_en": "What does the sign say?",
+      "question_type": "OCR",
+      "expected_video_ids": [],
+      "expected_frame_range": null,
+      "expected_answers": [],
+      "accepted_evidence": [],
+      "needs_manual_annotation": true,
+      "notes": ""
+    },
+    {
+      "query_id": "p7_dev_02",
+      "split": "development",
+      "event_query_vi": "một người cầm điện thoại",
+      "event_query_en": "a person holding a phone",
+      "question_vi": "Người đó cầm vật gì?",
+      "question_en": "What is the person holding?",
+      "question_type": "OBJECT",
+      "expected_video_ids": [],
+      "expected_frame_range": null,
+      "expected_answers": [],
+      "accepted_evidence": [],
+      "needs_manual_annotation": true,
+      "notes": ""
+    },
+    {
+      "query_id": "p7_hold_01",
+      "split": "holdout",
+      "event_query_vi": "một video của một kênh tin tức",
+      "event_query_en": "a video from a news channel",
+      "question_vi": "Video thuộc kênh nào?",
+      "question_en": "Which channel is the video from?",
+      "question_type": "METADATA",
+      "expected_video_ids": [],
+      "expected_frame_range": null,
+      "expected_answers": [],
+      "accepted_evidence": [],
+      "needs_manual_annotation": true,
+      "notes": "Frozen holdout: do not use to tune routing or normalization."
+    },
+    {
+      "query_id": "p7_hold_02",
+      "split": "holdout",
+      "event_query_vi": "một người đang phát biểu",
+      "event_query_en": "a person giving a speech",
+      "question_vi": "Người đó nói gì?",
+      "question_en": "What does the person say?",
+      "question_type": "ASR",
+      "expected_video_ids": [],
+      "expected_frame_range": null,
+      "expected_answers": [],
+      "accepted_evidence": [],
+      "needs_manual_annotation": true,
+      "notes": "Must remain blocked when no verified ASR evidence is available."
+    }
+  ]
+}

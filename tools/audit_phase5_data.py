@@ -14,7 +14,9 @@ def main() -> int:
     parser.add_argument("--data-root",type=Path,default=ROOT/"data"); parser.add_argument("--groups",default="L21"); parser.add_argument("--probe-audio",action="store_true"); parser.add_argument("--output",type=Path,required=True)
     args=parser.parse_args(); groups={x.strip() for x in args.groups.split(",") if x.strip()}
     video_ids=set()
-    for base,pattern in ((args.data_root/"keyframes","*"),(args.data_root/"map-keyframes","*.csv"),(args.data_root/"videos","*")):
+    videos_root=args.data_root/"videos"
+    if not videos_root.is_dir(): videos_root=args.data_root/"video"
+    for base,pattern in ((args.data_root/"keyframes","*"),(args.data_root/"map-keyframes","*.csv"),(videos_root,"*")):
         if base.exists():
             for path in base.rglob(pattern):
                 video_id=path.stem if path.is_file() else path.name
@@ -23,7 +25,7 @@ def main() -> int:
     video_ext={".mp4",".mkv",".avi",".mov",".webm"}
     for video_id in sorted(video_ids):
         images=list((args.data_root/"keyframes"/video_id).glob("*.jpg"))
-        videos=sorted(path for path in (args.data_root/"videos").rglob(f"{video_id}.*") if path.suffix.lower() in video_ext) if (args.data_root/"videos").exists() else []
+        videos=sorted(path for path in videos_root.rglob(f"{video_id}.*") if path.suffix.lower() in video_ext) if videos_root.exists() else []
         video=videos[0] if videos else None
         row={"video_id":video_id,"keyframes":len(images),"has_mapping":(args.data_root/"map-keyframes"/f"{video_id}.csv").is_file(),"has_video":video is not None,"video_size_bytes":video.stat().st_size if video else None,"audio_status":"NOT_PROBED"}
         if args.probe_audio and video:

@@ -1,0 +1,32 @@
+{
+  "schema_version": "phase7-qa-v1",
+  "question_router_version": "phase7-rule-router-v1",
+  "normalization_version": "phase7-nondestructive-normalization-v1",
+  "confidence_policy_version": "phase7-evidence-guard-v1",
+  "answer_strategy_version": "phase7-evidence-first-v1",
+  "require_human_confirmation": true,
+  "require_evidence_for_confirmation": true,
+  "allow_ocr": true,
+  "allow_asr": true,
+  "scope_groups": ["L21"],
+  "max_candidates": 12,
+  "max_evidence_per_modality": 8,
+  "normalization": {
+    "number_aliases": {
+      "một": ["1"], "hai": ["2"], "ba": ["3"], "bốn": ["4"], "năm": ["5"],
+      "sáu": ["6"], "bảy": ["7"], "tám": ["8"], "chín": ["9"], "mười": ["10"],
+      "one": ["1"], "two": ["2"], "three": ["3"], "four": ["4"], "five": ["5"],
+      "six": ["6"], "seven": ["7"], "eight": ["8"], "nine": ["9"], "ten": ["10"]
+    },
+    "color_aliases": {
+      "đỏ": ["red"], "red": ["đỏ"], "xanh": ["blue", "green"], "blue": ["xanh"], "green": ["xanh"],
+      "trắng": ["white"], "white": ["trắng"], "đen": ["black"], "black": ["đen"],
+      "vàng": ["yellow"], "yellow": ["vàng"], "hồng": ["pink"], "pink": ["hồng"]
+    },
+    "unit_aliases": ["kg", "g", "km", "m", "cm", "phút", "giây", "hours", "minutes", "seconds"]
+  },
+  "lvlm": {
+    "enabled": false,
+    "status": "DEFERRED_REQUIRES_EXPLICIT_APPROVAL"
+  }
+}
