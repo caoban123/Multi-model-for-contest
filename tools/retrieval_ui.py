@@ -32,7 +32,10 @@ def main() -> int:
     parser.add_argument("--metadata-dir", type=Path, default=ROOT / "data" / "media-info")
     parser.add_argument("--object-store", type=Path, default=ROOT / "artifacts" / "structured" / "l21_objects.sqlite")
     parser.add_argument("--object-aliases", type=Path, default=ROOT / "config" / "object_aliases_v1.json")
-    parser.add_argument("--phase5-store", type=Path, default=ROOT / "artifacts" / "phase5" / "stores" / "phase5_l21.sqlite3")
+    default_p5 = ROOT / "artifacts" / "phase5" / "stores" / "phase5_l21.sqlite3"
+    if not default_p5.exists() and (ROOT / "artifacts" / "phase5" / "phase5_store.sqlite").exists():
+        default_p5 = ROOT / "artifacts" / "phase5" / "phase5_store.sqlite"
+    parser.add_argument("--phase5-store", type=Path, default=default_p5)
     parser.add_argument("--phase6-config", type=Path, default=ROOT / "configs" / "phase6_reranker_v1.json")
     parser.add_argument("--groups", default="L21")
     parser.add_argument("--clip-model-id", default=os.environ.get("AIC_CLIP_MODEL_ID", DEFAULT_CLIP_MODEL_ID))

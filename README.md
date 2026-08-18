@@ -415,11 +415,43 @@ Quyết định P4.10: **HYBRID OPT-IN**. Implementation, API, UI và ablation p
 
 ## Phase 5 — OCR/ASR Opt-In
 
-Phase 5 có schema, temporal mapping, SQLite FTS5 store, lexical search, OCR/ASR evidence trong structured RRF và timeline. Hai channel bị tắt mặc định và chỉ khả dụng khi truyền `--phase5-store` trỏ tới store đã build. Do checkout không chứa contest data/model và benchmark chưa được chấm tay, Phase 5 hiện giữ **opt-in**, không được coi là quality-verified.
+Phase 5 bổ sung schema, temporal mapping, SQLite FTS5 store, lexical search, OCR/ASR evidence trong structured RRF và timeline. Hai channel bị tắt mặc định và chỉ khả dụng khi truyền `--phase5-store` trỏ tới store đã build.
 
-Hướng dẫn audit, pilot, build store, API/UI và benchmark nằm tại [`docs/PHASE5_TESTING.md`](docs/PHASE5_TESTING.md). Snapshot tiến độ và blocker nằm tại [`reports/Phase_5_17-08-2026_1.md`](reports/Phase_5_17-08-2026_1.md).
+### 1. Trích xuất OCR & ASR Evidence (JSONL):
 
-Nếu `artifacts/` bị xóa, dùng `python tools/prepare_phase5.py --data-root data --groups L21 --skip-store` để rebuild registry và NumPy index bằng pipeline thật. Khi có OCR/ASR JSONL đã review, bỏ `--skip-store` và truyền `--ocr-jsonl`/`--asr-jsonl` để build lại store; workflow không tạo evidence giả.
+Để trích xuất dữ liệu OCR và ASR chuẩn schema `Phase5`:
+
+```powershell
+# Trích xuất OCR & ASR cho tập L21 (Whisper model local)
+python tools\extract_phase5_evidence.py --groups L21 --whisper-model-name models--Systran--faster-whisper-base
+
+# Tùy chọn bỏ qua OCR hoặc ASR khi cần test từng kênh:
+python tools\extract_phase5_evidence.py --groups L21 --skip-ocr
+python tools\extract_phase5_evidence.py --groups L21 --skip-asr
+```
+
+Output sẽ sinh ra 2 file JSONL chuẩn schema tại `artifacts/phase5/`:
+- `artifacts/phase5/ocr_l21.jsonl`
+- `artifacts/phase5/asr_l21.jsonl`
+
+### 2. Build SQLite FTS5 Evidence Store:
+
+Sau khi đã có file OCR & ASR JSONL, ingest dữ liệu vào SQLite FTS5 store:
+
+```powershell
+python tools\build_phase5_store.py `
+  --ocr-jsonl artifacts\phase5\ocr_l21.jsonl `
+  --asr-jsonl artifacts\phase5\asr_l21.jsonl `
+  --index-dir artifacts\indexes\l21_numpy `
+  --output artifacts\phase5\phase5_store.sqlite `
+  --overwrite
+```
+
+### 3. Workflow & Testing:
+
+Hướng dẫn audit, pilot, build store, API/UI và benchmark nằm tại [`docs/PHASE5_TESTING.md`](docs/PHASE5_TESTING.md). Snapshot tiến độ nằm tại [`reports/Phase_5_17-08-2026_1.md`](reports/Phase_5_17-08-2026_1.md).
+
+Nếu `artifacts/` bị xóa, dùng `python tools/prepare_phase5.py --data-root data --groups L21 --skip-store` để rebuild registry và NumPy index bằng pipeline thật. khi có OCR/ASR JSONL đã review, bỏ `--skip-store` và truyền `--ocr-jsonl`/`--asr-jsonl` để build lại store; workflow không tạo evidence giả.
 
 ## Phase 6 — Local Query Planner Và Top-N Reranker
 

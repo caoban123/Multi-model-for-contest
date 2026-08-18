@@ -36,6 +36,10 @@ def make_structured_service(tmp_path: Path) -> RetrievalUiService:
     class Encoder:
         def encode_text(self,text): return np.array([1,0],dtype=np.float32)
     service.encoder=Encoder()
+    from aic_retrieval.hybrid_ranking import RrfConfig
+    from aic_retrieval.reranking import RerankerConfig
+    service.rrf_config = RrfConfig()
+    service.reranker_config = RerankerConfig()
     service.query_planner=RuleBasedQueryPlanner()
     return service
 
