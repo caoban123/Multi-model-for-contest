@@ -1,0 +1,8 @@
+{
+  "version": "phase8-trake-development-v1",
+  "split": "development",
+  "annotation_status": "UNLABELLED_TEMPLATE",
+  "queries": [
+    {"query_id": "trake-dev-001", "query": "", "events": [], "expected_video_id": null, "expected_event_frames": [], "notes": "Fill only after manual annotation."}
+  ]
+}

@@ -56,6 +56,17 @@ class ClipTextEncoder:
             text_features = text_features / text_features.norm(p=2, dim=-1, keepdim=True)
             return text_features.cpu().numpy().astype("float32")
 
+    def encode_images(self, images: list[object]) -> np.ndarray:
+        """Encode an explicitly bounded image batch with the already loaded CLIP model."""
+        if not images:
+            raise ValueError("images must not be empty")
+        with self._torch.no_grad():
+            inputs = self.processor(images=images, return_tensors="pt").to(self.device)
+            vision_outputs = self.model.vision_model(pixel_values=inputs["pixel_values"])
+            image_features = self.model.visual_projection(vision_outputs.pooler_output)
+            image_features = image_features / image_features.norm(p=2, dim=-1, keepdim=True)
+            return image_features.cpu().numpy().astype("float32")
+
 
 def encode_clip_text(
     text: str,

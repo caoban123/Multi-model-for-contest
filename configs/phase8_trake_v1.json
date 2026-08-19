@@ -1,0 +1,11 @@
+{
+  "version": "phase8-trake-v1",
+  "scope": {"groups": ["L21"], "min_events": 1, "max_events": 5},
+  "retrieval": {"event_pool_size": 60, "max_per_event_per_video": 8, "video_pool_size": 20},
+  "alignment": {"top_chains_per_video": 5, "strict_temporal_order": true, "allow_same_frame": false, "gap_mode": "preferred", "beam_size": 100},
+  "scoring": {"required_coverage_weight": 2.0, "optional_coverage_weight": 0.5, "evidence_weight": 0.03, "preferred_gap_penalty": 0.25, "optional_skip_penalty": 0.15, "duplicate_penalty": 1.0},
+  "refinement": {"on_demand_only": true, "coarse_window_seconds": 5.0, "coarse_fps": 3.0, "fine_window_seconds": 1.0, "fine_fps": 12.0, "max_frames_per_refinement": 60},
+  "review": {"human_confirmation_required": true, "internal_export_only": true},
+  "p8_7_vlm_extension": {"enabled": false, "provider": null, "model": null, "network_calls_allowed": false},
+  "benchmark": {"development_config_frozen": true, "holdout_tuning_forbidden": true}
+}

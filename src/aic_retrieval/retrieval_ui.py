@@ -24,7 +24,7 @@ from aic_retrieval.metadata_search import MetadataConstraints
 from aic_retrieval.hybrid_candidates import StructuredCandidateGenerator
 from aic_retrieval.hybrid_ranking import RrfConfig, rank_video_candidates
 from aic_retrieval.color_attributes import ColorAttributeService, parse_color_constraint
-from aic_retrieval.object_search import ObjectSearchService
+from aic_retrieval.object_search import ObjectPredicate, ObjectSearchConfig, ObjectSearchService
 from aic_retrieval.object_store import load_alias_dictionary
 from aic_retrieval.structured_query import ObjectConstraint, StructuredQuery
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
@@ -36,6 +36,10 @@ from aic_retrieval.qa_schema import AvailabilityStatus, EvidenceModality, QaRequ
 from aic_retrieval.qa_workflow import QaWorkflow, jsonable, state_payload
 from aic_retrieval.qa_store import QaStore
 from aic_retrieval.qa_gemini_answering import GeminiEvidenceAnswerer
+from aic_retrieval.trake_schema import Availability, TrakeEvent
+from aic_retrieval.trake_workflow import TrakeWorkflow
+from aic_retrieval.trake_store import TrakeStore
+from aic_retrieval.trake_refinement import DenseRefiner
 
 
 DEFAULT_TOP_K_VIDEOS = 12
@@ -66,6 +70,9 @@ class RetrievalUiConfig:
     phase5_store_path: Path | None = None
     phase6_config_path: Path | None = None
     qa_store_path: Path | None = None
+    trake_store_path: Path | None = None
+    trake_static_dir: Path | None = None
+    trake_refinement_dir: Path | None = None
 
 
 class RetrievalUiService:
@@ -112,6 +119,114 @@ class RetrievalUiService:
         self.rrf_config = RrfConfig(**phase6_payload.get("fusion", {}))
         self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs, self.attribute_service, self.phase5_service)
         self.qa_workflow = QaWorkflow(store=QaStore(config.qa_store_path) if config.qa_store_path else None)
+        modality_availability = {
+            "clip": Availability.AVAILABLE,
+            "object": Availability.AVAILABLE if self.object_service else Availability.UNAVAILABLE,
+            "attribute": Availability.AVAILABLE if self.attribute_service.available else Availability.UNAVAILABLE,
+            "ocr": Availability.UNKNOWN if self.phase5_service and self.phase5_service.available else Availability.UNAVAILABLE,
+            "asr": Availability.UNKNOWN if self.phase5_service and self.phase5_service.available else Availability.UNAVAILABLE,
+            "metadata": Availability.AVAILABLE if self.metadata_docs else Availability.UNAVAILABLE,
+        }
+        self.trake_workflow = TrakeWorkflow(
+            self._trake_retrieve_event,
+            modality_availability=modality_availability,
+            store=TrakeStore(config.trake_store_path) if config.trake_store_path else None,
+        )
+        self.trake_refiner = DenseRefiner(
+            config.repo_root, self.assets_by_video,
+            config.trake_refinement_dir or (config.repo_root / "artifacts" / "trake" / "refinement"),
+            self._trake_frame_scores,
+        )
+
+    def _trake_retrieve_event(self, event: TrakeEvent, pool_size: int) -> list[dict[str, Any]]:
+        fused: dict[tuple[str, int], dict[str, Any]] = {}
+        ref_by_key = self.structured_generator.ref_by_key
+
+        def add(video_id: str, keyframe_id: int, modality: str, rank: int, score: float | None, evidence: dict[str, Any]) -> None:
+            ref = ref_by_key.get((video_id, keyframe_id))
+            if ref is None: return
+            item = fused.setdefault((video_id,keyframe_id), {**asdict(ref),"provenance":[],"evidence":{"fps":ref.fps},"raw_modality_scores":{},"rrf_score":0.0})
+            if modality not in item["provenance"]: item["provenance"].append(modality)
+            item["evidence"].setdefault(modality,[]).append(evidence)
+            item["raw_modality_scores"][modality]=score
+            item["rrf_score"] += 1.0/(60.0+rank)
+
+        query_vector = None
+        if "clip" in event.modalities:
+            query_vector = self._encoder().encode_text(event.clip_query)
+            for result in search_numpy_index(self.index,self.refs,query_vector,top_k=pool_size):
+                add(result.video_id,result.keyframe_id,"clip",result.rank,result.score,{"rank":result.rank,"score":result.score})
+        if "object" in event.modalities and self.object_service:
+            for constraint in event.object_constraints:
+                labels=tuple(str(value) for value in constraint.get("labels",()) if str(value))
+                if not labels and constraint.get("label"): labels=(str(constraint["label"]),)
+                if not labels: continue
+                result=self.object_service.search(ObjectPredicate(labels,str(constraint.get("count_operator",">=")),int(constraint.get("count",1)),str(constraint.get("horizontal","any")),str(constraint.get("vertical","any"))),ObjectSearchConfig(float(constraint.get("min_confidence",.3)),float(constraint.get("nms_iou_threshold",.5))))
+                for row in result["results"][:pool_size]: add(row["video_id"],row["keyframe_id"],"object",int(row["object_rank"]),float(row["object_score"]),row)
+        if "attribute" in event.modalities and self.attribute_service.available:
+            for raw_constraint in event.attribute_constraints:
+                constraint=parse_color_constraint(event.clip_query,str(raw_constraint.get("color", "")),str(raw_constraint.get("filter_mode","soft")))
+                if constraint is None: continue
+                candidate_keys=set(fused) or None
+                for row in self.attribute_service.search(constraint,candidate_keys)["results"][:pool_size]: add(row["video_id"],row["keyframe_id"],"attribute",int(row["attribute_rank"]),float(row["attribute_score"]),row)
+        if self.phase5_service and self.phase5_service.available:
+            if "ocr" in event.modalities:
+                rows=self.phase5_service.search_ocr(event.clip_query,pool_size,float((event.ocr_constraints or ({},))[0].get("min_confidence",0)))
+                for row in rows:
+                    if row.get("keyframe_id") is not None: add(row["video_id"],int(row["keyframe_id"]),"ocr",int(row["ocr_rank"]),float(row["ocr_score"]),row)
+            if "asr" in event.modalities:
+                for row in self.phase5_service.search_asr(event.clip_query,pool_size):
+                    if row.get("keyframe_id") is not None: add(row["video_id"],int(row["keyframe_id"]),"asr",int(row["asr_rank"]),float(row["asr_score"]),row)
+        ordered=sorted(fused.values(),key=lambda item:(-item["rrf_score"],item["video_id"],item["keyframe_id"]))[:pool_size]
+        for rank,item in enumerate(ordered,1):
+            item.update({"rank":rank,"score":item["rrf_score"],"retrieval_method":"rank_fusion_existing_channels_v1"})
+        return ordered
+
+    def trake_plan(self, query_id: str, query: str, manual_events: list[str] | None = None, constraints: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.trake_workflow.plan(query_id, query, manual_events=manual_events, constraints=constraints)
+
+    def trake_search(self, session_id: str, event_pool_size: int = 60, max_per_video: int = 8, video_pool_size: int = 20) -> dict[str, Any]:
+        return self.trake_workflow.search(session_id, event_pool_size=event_pool_size, max_per_video=max_per_video, video_pool_size=video_pool_size)
+
+    def trake_align(self, session_id: str, top_k_per_video: int = 5, top_videos: int = 20) -> dict[str, Any]:
+        return self.trake_workflow.align(session_id, top_k_per_video=top_k_per_video, top_videos=top_videos)
+
+    def trake_session(self, session_id: str) -> dict[str, Any]:
+        return self.trake_workflow.get(session_id)
+
+    def trake_sessions(self) -> dict[str, Any]:
+        return self.trake_workflow.list_sessions()
+
+    def trake_update_plan(self, session_id: str, events: list[dict[str, Any]], constraints: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self.trake_workflow.update_plan(session_id, events, constraints)
+
+    def trake_replace(self, session_id: str, chain_id: str, event_id: str, candidate_id: str, lock_event: bool = True) -> dict[str, Any]:
+        return self.trake_workflow.replace_candidate(session_id, chain_id, event_id, candidate_id, lock_event=lock_event)
+
+    def trake_review(self, session_id: str, chain_id: str, decision: str, reviewer: str) -> dict[str, Any]:
+        return self.trake_workflow.review(session_id, chain_id, decision, reviewer)
+
+    def trake_export(self, session_id: str, review_id: str) -> dict[str, Any]:
+        return self.trake_workflow.export(session_id, review_id)
+
+    def _trake_frame_scores(self, text: str, images: list[Any]) -> list[float]:
+        text_vector = self._encoder().encode_text(text)
+        image_vectors = self._encoder().encode_images(images)
+        return [float(value) for value in image_vectors @ text_vector]
+
+    def trake_refine(self, session_id: str, chain_id: str, event_id: str) -> dict[str, Any]:
+        state = self.trake_workflow._state(session_id)
+        chain = state.manual_chain if state.manual_chain and state.manual_chain.chain_id == chain_id else next((item for result in state.alignments for item in result.chains if item.chain_id == chain_id), None)
+        if chain is None: raise KeyError(f"unknown TRAKE chain: {chain_id}")
+        entry = next((item for item in chain.events if item.event_id == event_id), None)
+        event = next((item for item in state.request.events if item.event_id == event_id), None)
+        if entry is None or entry.candidate is None or event is None: raise ValueError("selected event candidate is required for refinement")
+        fps = float(entry.candidate.evidence.get("fps") or entry.candidate.evidence.get("raw_result",{}).get("fps") or 25.0)
+        result = self.trake_refiner.refine(video_id=chain.video_id,event_id=event_id,event_text=event.clip_query,source_keyframe_id=entry.candidate.keyframe_id,source_frame_idx=entry.candidate.frame_idx,source_pts_time=entry.candidate.pts_time,fps=fps)
+        payload=result.to_dict(); payload.update({"refinement_id":f"refine-{int(time.time()*1000)}-{event_id}","session_id":session_id,"chain_id":chain_id,"created_at":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())})
+        if self.trake_workflow.store: self.trake_workflow.store.append_refinement(payload)
+        if payload.get("refined_image_path"): payload["image_url"]="/keyframe?path="+payload["refined_image_path"]
+        return {"refinement":payload}
 
     def search(
         self,
@@ -607,6 +722,10 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self._serve_static("index.html")
+            elif parsed.path == "/trake" or parsed.path == "/trake/":
+                self._serve_trake_static("index.html")
+            elif parsed.path.startswith("/trake/static/"):
+                self._serve_trake_static(parsed.path.removeprefix("/trake/static/"))
             elif parsed.path.startswith("/static/"):
                 self._serve_static(parsed.path.removeprefix("/static/"))
             elif parsed.path == "/api/health":
@@ -631,6 +750,9 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "reranker_available": True,
                         "qa_available": hasattr(service, "qa_prepare"),
                         "qa_persistence": "sqlite" if getattr(service, "qa_workflow", None) and service.qa_workflow.store else "memory_until_p7_5",
+                        "trake_available": hasattr(service, "trake_plan"),
+                        "trake_scope": "L21",
+                        "trake_vlm_enabled": False,
                     }
                 )
             elif parsed.path == "/api/search":
@@ -649,6 +771,12 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._handle_qa_session(parsed.path.removeprefix("/api/qa/session/"))
             elif parsed.path == "/api/qa/sessions":
                 self._handle_qa_sessions()
+            elif parsed.path == "/api/trake/health":
+                self._json({"ok": True, "available": hasattr(service, "trake_plan"), "group": "L21", "vlm_enabled": False})
+            elif parsed.path.startswith("/api/trake/session/"):
+                self._handle_trake_session(parsed.path.removeprefix("/api/trake/session/"))
+            elif parsed.path == "/api/trake/sessions":
+                self._json(service.trake_sessions())
             elif parsed.path == "/keyframe":
                 self._serve_keyframe(parsed.query)
             elif parsed.path == "/video":
@@ -684,6 +812,34 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     )
                 elif self.path == "/api/qa/export":
                     result = service.qa_export(str(payload.get("session_id") or ""), str(payload.get("review_id") or ""))
+                elif self.path == "/api/trake/plan":
+                    result = service.trake_plan(
+                        str(payload.get("query_id") or f"trake-{int(time.time() * 1000)}"),
+                        str(payload.get("query") or ""),
+                        [str(item) for item in payload["manual_events"]] if payload.get("manual_events") is not None else None,
+                        dict(payload.get("constraints") or {}),
+                    )
+                elif self.path == "/api/trake/search":
+                    result = service.trake_search(
+                        str(payload.get("session_id") or ""),
+                        int(payload.get("event_pool_size", 60)), int(payload.get("max_per_video", 8)), int(payload.get("video_pool_size", 20)),
+                    )
+                elif self.path == "/api/trake/align":
+                    result = service.trake_align(
+                        str(payload.get("session_id") or ""), int(payload.get("top_k_per_video", 5)), int(payload.get("top_videos", 20)),
+                    )
+                elif self.path == "/api/trake/update-plan":
+                    result = service.trake_update_plan(str(payload.get("session_id") or ""), list(payload.get("events") or []), dict(payload["constraints"]) if payload.get("constraints") is not None else None)
+                elif self.path == "/api/trake/replace":
+                    result = service.trake_replace(str(payload.get("session_id") or ""), str(payload.get("chain_id") or ""), str(payload.get("event_id") or ""), str(payload.get("candidate_id") or ""), bool(payload.get("lock_event", True)))
+                elif self.path == "/api/trake/review":
+                    result = service.trake_review(str(payload.get("session_id") or ""), str(payload.get("chain_id") or ""), str(payload.get("decision") or ""), str(payload.get("reviewer") or "local-reviewer"))
+                elif self.path == "/api/trake/export":
+                    result = service.trake_export(str(payload.get("session_id") or ""), str(payload.get("review_id") or ""))
+                elif self.path == "/api/trake/refine":
+                    result = service.trake_refine(str(payload.get("session_id") or ""), str(payload.get("chain_id") or ""), str(payload.get("event_id") or ""))
+                elif self.path == "/api/trake/save":
+                    result = service.trake_session(str(payload.get("session_id") or ""))
                 else:
                     self._error(HTTPStatus.NOT_FOUND, "not found")
                     return
@@ -790,6 +946,13 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
             self._json(payload)
 
+        def _handle_trake_session(self, session_id: str) -> None:
+            try:
+                payload = service.trake_session(session_id)
+            except Exception as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
+            self._json(payload)
+
         def _handle_neighborhood(self, query_string: str) -> None:
             params = parse_qs(query_string)
             try:
@@ -859,6 +1022,18 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.end_headers()
             with path.open("rb") as handle:
                 self.wfile.write(handle.read())
+
+        def _serve_trake_static(self, relative_path: str) -> None:
+            static_dir = config.trake_static_dir or (config.repo_root / "web" / "trake_ui")
+            path = (static_dir / relative_path).resolve()
+            try: path.relative_to(static_dir.resolve())
+            except ValueError:
+                self._error(HTTPStatus.FORBIDDEN, "TRAKE static path is outside static dir"); return
+            if not path.is_file():
+                self._error(HTTPStatus.NOT_FOUND, "TRAKE static file not found"); return
+            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            body = path.read_bytes()
+            self.send_response(HTTPStatus.OK); self.send_header("Content-Type", content_type); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
         def _serve_binary_file(self, path: Path, supports_range: bool = False) -> None:
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"

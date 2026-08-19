@@ -1,0 +1,17 @@
+{
+  "version": "phase8-trake-fixture-v1",
+  "synthetic_fixture_only": true,
+  "query": "door opens then a person enters",
+  "events": ["door opens", "a person enters"],
+  "expected_video_id": "L21_FIXTURE_V001",
+  "expected_keyframe_ids": [1, 8],
+  "candidates": {
+    "e1": [
+      {"video_id": "L21_FIXTURE_V001", "keyframe_id": 9, "frame_idx": 90, "pts_time": 9.0, "score": 0.99},
+      {"video_id": "L21_FIXTURE_V001", "keyframe_id": 1, "frame_idx": 10, "pts_time": 1.0, "score": 0.80}
+    ],
+    "e2": [
+      {"video_id": "L21_FIXTURE_V001", "keyframe_id": 8, "frame_idx": 80, "pts_time": 8.0, "score": 0.95}
+    ]
+  }
+}

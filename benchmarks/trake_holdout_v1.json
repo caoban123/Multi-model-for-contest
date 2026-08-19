@@ -1,0 +1,8 @@
+{
+  "version": "phase8-trake-holdout-v1",
+  "split": "holdout",
+  "annotation_status": "UNLABELLED_FROZEN_TEMPLATE",
+  "queries": [
+    {"query_id": "trake-holdout-001", "query": "", "events": [], "expected_video_id": null, "expected_event_frames": [], "notes": "Annotate and evaluate only after development config is frozen."}
+  ]
+}

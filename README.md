@@ -4,7 +4,7 @@
 
 > Read this section first. Older sections below are retained as historical phase notes and may describe earlier limitations.
 
-The repository now contains a working L21-focused video retrieval system with UI, hybrid/structured retrieval, Phase 5 ASR/OCR storage, Phase 6 reranking/planning, Phase 7 Q&A, optional Gemini VLM answer drafting, and Phase 9 internal submission hardening. Phase 8 TRAKE is still planned but not implemented.
+The repository now contains a working L21-focused video retrieval system with UI, hybrid/structured retrieval, Phase 5 ASR/OCR storage, Phase 6 reranking/planning, Phase 7 Q&A, a local Phase 8 TRAKE implementation, optional Gemini Q&A drafting, and Phase 9 internal submission hardening. TRAKE's optional P8.7 VLM extension remains disabled.
 
 Latest comprehensive report:
 
@@ -27,7 +27,7 @@ High-level status:
 | Phase 6 reranker/planner | Implemented | Local query planner/reranker config exists at `configs/phase6_reranker_v1.json`. |
 | Phase 7 Q&A | Implemented | Evidence-first Q&A, manual review, SQLite session store, export record flow. |
 | Gemini Q&A/VLM | Implemented as option | `Draft with Gemini` sends selected evidence plus related keyframe images to Gemini. |
-| Phase 8 TRAKE | Not implemented | Plan exists in `plan/09_PHASE_8_TRAKE.md`; backend/UI are still TODO. |
+| Phase 8 TRAKE | Implementation complete; quality pending | Local plan/retrieve/temporal-align, `/trake` workspace, SQLite review, internal export and selected-event refinement exist; manual development/holdout labels are pending. |
 | Phase 9 submission hardening | Started | Internal schema, validator, QA export adapter, runbook are implemented. |
 | FAISS/vector DB | Not implemented | Current retrieval uses NumPy index; FAISS/vector DB remain future optimization. |
 
@@ -82,7 +82,7 @@ Known limitations:
 - Q&A candidate retrieval does not yet use structured retrieval by default; it currently uses the Gemini-optimized CLIP event query.
 - Gemini VLM answer drafting requires Internet and a configured Gemini API key.
 - Confirmed Q&A submission export currently produces no candidates until the user confirms/exports Q&A records in the UI.
-- Phase 8 TRAKE has not been implemented.
+- Phase 8 TRAKE core is implemented for L21; quality/holdout verification is pending manual labels. See `docs/PHASE8_TESTING.md`.
 - Official contest submission adapter is pending the organizer's final format.
 
 Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. Dự án đang ở giai đoạn đầu: ưu tiên kiểm kê dữ liệu, xác minh mapping, dựng registry và baseline retrieval trước khi làm UI, Q&A, TRAKE hoặc agent.
