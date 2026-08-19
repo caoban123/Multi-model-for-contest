@@ -159,6 +159,28 @@ class QaStore:
             rows = connection.execute("SELECT session_id,query_id,event_query,question,created_at FROM qa_sessions ORDER BY created_at DESC LIMIT ?", (max(1, min(limit, 100)),)).fetchall()
             return [dict(row) for row in rows]
 
+    def list_exports(self, limit: int = 1000) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT e.export_id,e.session_id,e.review_id,e.video_id,e.frame_id,e.answer,e.evidence_ids_json,e.confirmed,
+                       e.created_at,e.schema_version,e.metadata_json,s.query_id,s.event_query,s.question
+                FROM qa_exports e
+                JOIN qa_sessions s ON s.session_id=e.session_id
+                ORDER BY e.created_at ASC
+                LIMIT ?
+                """,
+                (max(1, min(limit, 10000)),),
+            ).fetchall()
+            return [
+                {
+                    **dict(row),
+                    "evidence_ids": tuple(_load(row["evidence_ids_json"])),
+                    "metadata": _load(row["metadata_json"]),
+                }
+                for row in rows
+            ]
+
     def create_export(self, session_id: str, review_id: str) -> QaExportRecord:
         state = self.load_state(session_id)
         review = next((item for item in state.reviews if item.review_id == review_id), None)

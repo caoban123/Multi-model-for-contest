@@ -35,13 +35,12 @@
         <form id="search-form" class="search-form">
           <div class="query-row">
             <label class="query-field">
-              <span>Vietnamese query</span>
+              <span>Query</span>
               <input id="query" name="query" type="search" autocomplete="off" placeholder="người đang cầm điện thoại" required>
             </label>
-            <button id="translate-button" class="secondary-button translate-button" type="button">Translate</button>
             <label class="clip-query-field">
-              <span>Translated CLIP query</span>
-              <input id="clip-query" name="clip-query" type="search" autocomplete="off" placeholder="a person holding a phone">
+              <span>Auto CLIP query</span>
+              <input id="clip-query" name="clip-query" type="search" autocomplete="off" placeholder="generated automatically for CLIP" readonly>
             </label>
           </div>
 
@@ -175,13 +174,14 @@
         </div>
         <form id="qa-form" class="qa-form">
           <label><span>Event query</span><input id="qa-event-query" required placeholder="một người đứng cạnh biển hiệu"></label>
+          <label><span>Auto CLIP event query</span><input id="qa-clip-event-query" readonly placeholder="generated automatically for Q&A retrieval"></label>
           <label><span>Question</span><input id="qa-question" required placeholder="Biển hiệu ghi gì?"></label>
           <button id="qa-prepare-button" class="search-button" type="submit">Prepare evidence</button>
         </form>
         <div id="qa-status" class="qa-status" aria-live="polite">Prepare a Q&amp;A request to inspect candidate evidence.</div>
         <div class="qa-columns">
           <section><h3>Candidate videos</h3><div id="qa-candidates" class="qa-list"></div></section>
-          <section><h3>Evidence selection</h3><div id="qa-evidence" class="qa-list"></div><button id="qa-draft-button" class="secondary-button" type="button" disabled>Draft answer from selected evidence</button></section>
+          <section><h3>Evidence selection</h3><div id="qa-evidence" class="qa-list"></div><label class="check-field qa-gemini-option"><input id="qa-use-gemini" type="checkbox"> Draft with Gemini</label><button id="qa-draft-button" class="secondary-button" type="button" disabled>Draft answer from selected evidence</button></section>
           <section><h3>Answer review</h3><div id="qa-answer" class="qa-answer">No answer draft.</div><label><span>Final answer</span><input id="qa-final-answer" disabled></label><div class="qa-actions"><button id="qa-save-draft-button" class="secondary-button" type="button" disabled>Save draft</button><button id="qa-confirm-button" class="search-button" type="button" disabled>Confirm</button><button id="qa-reject-button" class="secondary-button" type="button" disabled>Reject</button><button id="qa-export-button" class="secondary-button" type="button" disabled>Export confirmed record</button></div><h3>Session history</h3><div id="qa-history" class="qa-list"></div></section>
         </div>
       </section>

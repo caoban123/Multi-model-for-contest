@@ -6,14 +6,15 @@
 - No verified OCR/ASR source: no OCR/speech claim.
 - Human review is mandatory before an internal export record is created.
 - Raw answers are retained alongside normalization outputs.
-- LVLM is deferred and must not be downloaded or enabled by this workflow.
+- Q&A event retrieval uses the Gemini-optimized CLIP event query when configured, while the original event query remains in the Q&A request for audit.
+- Gemini VLM drafting is opt-in only. It receives selected evidence plus related keyframe images, and its answer still requires human review before export.
 
 ## Milestone commands
 
 Run the completed Phase 7 suite:
 
 ```powershell
-python -m pytest tests/test_qa_schema.py tests/test_qa_evidence.py tests/test_qa_question_router.py tests/test_qa_answering.py tests/test_qa_normalization.py tests/test_qa_confidence.py tests/test_qa_store.py tests/test_qa_workflow.py tests/test_qa_api.py tests/test_qa_ui_static.py tests/test_qa_benchmark.py -q
+python -m pytest tests/test_qa_schema.py tests/test_qa_evidence.py tests/test_qa_question_router.py tests/test_qa_answering.py tests/test_qa_gemini_answering.py tests/test_qa_normalization.py tests/test_qa_confidence.py tests/test_qa_store.py tests/test_qa_workflow.py tests/test_qa_api.py tests/test_qa_ui_static.py tests/test_qa_benchmark.py -q
 ```
 
 The command is expanded as milestones are implemented. It must not be interpreted as a quality benchmark without manually annotated development and holdout labels.

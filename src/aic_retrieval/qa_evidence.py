@@ -198,6 +198,7 @@ def _retrieval_context(response: Mapping[str, Any]) -> dict[str, Any]:
         "mode", "query", "groups", "top_k", "candidate_pool", "candidate_pool_size",
         "structured_query", "query_plan", "reranker", "fusion_config", "aggregation_method",
         "index_schema_version", "index_fingerprint", "phase5_store_version", "phase6_config_version",
+        "qa_event_query", "qa_retrieval_query",
     )
     return {key: response[key] for key in keys if key in response}
 

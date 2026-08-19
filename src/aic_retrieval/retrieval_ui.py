@@ -28,13 +28,14 @@ from aic_retrieval.object_search import ObjectSearchService
 from aic_retrieval.object_store import load_alias_dictionary
 from aic_retrieval.structured_query import ObjectConstraint, StructuredQuery
 from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
-from aic_retrieval.translation import ExternalTranslator, TranslationConfig
+from aic_retrieval.translation import DEFAULT_GEMINI_API_URL, ExternalTranslator, TranslationConfig
 from aic_retrieval.phase5_store import Phase5SearchService
 from aic_retrieval.query_planner import RuleBasedQueryPlanner
 from aic_retrieval.reranking import RerankerConfig, load_reranker_config, rerank_video_results, reranker_metadata, with_top_n
 from aic_retrieval.qa_schema import AvailabilityStatus, EvidenceModality, QaRequest, ReviewDecision
 from aic_retrieval.qa_workflow import QaWorkflow, jsonable, state_payload
 from aic_retrieval.qa_store import QaStore
+from aic_retrieval.qa_gemini_answering import GeminiEvidenceAnswerer
 
 
 DEFAULT_TOP_K_VIDEOS = 12
@@ -322,11 +323,15 @@ class RetrievalUiService:
         question: str,
         selected_video_id: str | None = None,
         selected_frame_id: int | None = None,
+        retrieval_query: str | None = None,
     ) -> dict[str, Any]:
         request = QaRequest(query_id, event_query, question, selected_video_id, selected_frame_id)
-        response = self._qa_selected_response(request) if selected_video_id else self.search(event_query, top_k=12, candidate_pool=40)
+        search_query = (retrieval_query or event_query).strip()
+        response = self._qa_selected_response(request) if selected_video_id else self.search(search_query, top_k=12, candidate_pool=40)
         response = {
             **response,
+            "qa_event_query": event_query,
+            "qa_retrieval_query": search_query,
             "index_schema_version": self.index_metadata.get("index_schema_version"),
             "index_fingerprint": self.index_metadata.get("feature_source_fingerprint"),
             "phase5_store_version": "phase5-store-v1" if getattr(self, "phase5_service", None) and self.phase5_service.available else None,
@@ -341,8 +346,22 @@ class RetrievalUiService:
         )
         return self.qa_workflow.payload(state)
 
-    def qa_draft_answer(self, session_id: str, selected_evidence_ids: tuple[str, ...]) -> dict[str, Any]:
-        state, draft = self.qa_workflow.draft(session_id, selected_evidence_ids)
+    def qa_draft_answer(self, session_id: str, selected_evidence_ids: tuple[str, ...], answer_method: str = "evidence_first") -> dict[str, Any]:
+        answerer = None
+        if answer_method == "gemini":
+            gemini_config = self.translator.config
+            if gemini_config.provider != "gemini":
+                gemini_config = TranslationConfig(
+                    api_key=gemini_config.api_key,
+                    api_url=DEFAULT_GEMINI_API_URL,
+                    model=gemini_config.model,
+                    provider="gemini",
+                    timeout_seconds=gemini_config.timeout_seconds,
+                )
+            answerer = GeminiEvidenceAnswerer(gemini_config)
+        elif answer_method != "evidence_first":
+            raise ValueError(f"unsupported Q&A answer method: {answer_method}")
+        state, draft = self.qa_workflow.draft(session_id, selected_evidence_ids, answerer=answerer)
         return {**self.qa_workflow.payload(state), "answer_draft": jsonable(draft)}
 
     def qa_review(
@@ -647,11 +666,13 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         str(payload.get("question") or ""),
                         str(payload["selected_video_id"]) if payload.get("selected_video_id") else None,
                         int(payload["selected_frame_id"]) if payload.get("selected_frame_id") is not None else None,
+                        str(payload.get("retrieval_query") or "") or None,
                     )
                 elif self.path == "/api/qa/draft-answer":
                     result = service.qa_draft_answer(
                         str(payload.get("session_id") or ""),
                         tuple(str(item) for item in payload.get("selected_evidence_ids", []) if str(item)),
+                        str(payload.get("answer_method") or "evidence_first"),
                     )
                 elif self.path == "/api/qa/review":
                     result = service.qa_review(

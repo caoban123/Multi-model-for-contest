@@ -58,13 +58,18 @@ class QaWorkflow:
             self.store.save_session(session, pack, route)
         return state
 
-    def draft(self, session_id: str, selected_evidence_ids: tuple[str, ...] = ()) -> tuple[QaWorkspaceState, AnswerDraft]:
+    def draft(
+        self,
+        session_id: str,
+        selected_evidence_ids: tuple[str, ...] = (),
+        answerer: Any | None = None,
+    ) -> tuple[QaWorkspaceState, AnswerDraft]:
         state = self.get(session_id)
         # The answerer creates a deterministic content identity. A persisted
         # draft is an audit event, so it must be unique even when a reviewer
         # submits the same evidence in this or another session.
         draft = replace(
-            self.answerer.draft(state.pack, state.route, selected_evidence_ids),
+            (answerer or self.answerer).draft(state.pack, state.route, selected_evidence_ids),
             draft_id=f"draft-{uuid4().hex}",
         )
         state.drafts[draft.draft_id] = draft

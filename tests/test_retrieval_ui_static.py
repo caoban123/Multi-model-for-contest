@@ -76,6 +76,21 @@ def test_retrieval_ui_has_metadata_mode() -> None:
     assert "normalizeResult" in script
 
 
+def test_retrieval_ui_auto_translates_visual_query_for_clip() -> None:
+    html = (ROOT / "web" / "retrieval_ui" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "web" / "retrieval_ui" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="translate-button"' not in html
+    assert 'Auto CLIP query' in html
+    assert 'id="clip-query"' in html
+    assert "readonly" in html
+    assert "autoTranslateClipQuery" in script
+    assert "Optimizing query for CLIP with Gemini" in script
+    assert "translateButton" not in script
+    assert "grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr)" in styles
+
+
 def test_retrieval_ui_has_keyframe_neighborhood_viewer() -> None:
     script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
 

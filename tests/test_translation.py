@@ -20,6 +20,7 @@ def test_openai_compatible_payload_requests_plain_english_query() -> None:
     assert payload["model"] == DEFAULT_TRANSLATION_MODEL
     assert payload["temperature"] == 0
     assert payload["messages"][1]["content"] == "người cầm điện thoại"
+    assert "CLIP search prompts" in payload["messages"][0]["content"]
     assert "Return only the English query" in payload["messages"][0]["content"]
 
 
@@ -39,7 +40,10 @@ def test_gemini_payload_requests_plain_english_query() -> None:
 
     assert payload["generationConfig"]["temperature"] == 0
     assert payload["contents"][0]["role"] == "user"
-    assert "Return only the English query" in payload["contents"][0]["parts"][0]["text"]
+    prompt = payload["contents"][0]["parts"][0]["text"]
+    assert "optimized for CLIP" in prompt
+    assert "already English" in prompt
+    assert "Return only the final English CLIP query" in prompt
 
 
 def test_parse_gemini_translation_normalizes_text() -> None:

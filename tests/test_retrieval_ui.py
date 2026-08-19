@@ -7,6 +7,7 @@ import pytest
 from aic_retrieval.metadata_search import load_metadata_documents
 from aic_retrieval.retrieval_ui import RetrievalUiConfig, RetrievalUiService, parse_int
 from aic_retrieval.search import FrameRef, SearchResult, aggregate_results_by_video
+from aic_retrieval.qa_workflow import QaWorkflow
 
 
 def make_service(tmp_path: Path) -> RetrievalUiService:
@@ -132,6 +133,39 @@ def test_service_translate_uses_configured_translator(tmp_path: Path) -> None:
         "provider": "gemini",
         "model": "fake-model",
     }
+
+
+def test_qa_prepare_uses_retrieval_query_but_keeps_original_event_query(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    seen_queries: list[str] = []
+
+    def fake_search(query: str, **kwargs):
+        seen_queries.append(query)
+        return {
+            "mode": "visual",
+            "query": query,
+            "groups": ["L21"],
+            "top_k": 1,
+            "candidate_pool": 1,
+            "video_results": [{"video_id": "L21_V001", "rank": 1, "frames": []}],
+        }
+
+    service.search = fake_search
+    service.qa_workflow = QaWorkflow()
+    service.index_metadata = {}
+    service.reranker_config = type("Config", (), {})()
+    service.phase5_service = None
+    service.refs = []
+    service.index = np.zeros((1, 2))
+    service.object_service = None
+    service.metadata_docs = []
+    service.attribute_service = type("Attributes", (), {"available": False})()
+
+    payload = service.qa_prepare("q1", "người mặc áo đỏ", "đang làm gì?", retrieval_query="a person wearing a red shirt")
+
+    assert seen_queries == ["a person wearing a red shirt"]
+    assert payload["session"]["request"]["event_query"] == "người mặc áo đỏ"
+    assert payload["evidence_pack"]["retrieval_context"]["qa_retrieval_query"] == "a person wearing a red shirt"
 
 
 def test_service_metadata_search_returns_video_results(tmp_path: Path) -> None:

@@ -1,5 +1,90 @@
 # Multi-model for AIC Video Retrieval
 
+## Current Snapshot - 2026-08-19
+
+> Read this section first. Older sections below are retained as historical phase notes and may describe earlier limitations.
+
+The repository now contains a working L21-focused video retrieval system with UI, hybrid/structured retrieval, Phase 5 ASR/OCR storage, Phase 6 reranking/planning, Phase 7 Q&A, optional Gemini VLM answer drafting, and Phase 9 internal submission hardening. Phase 8 TRAKE is still planned but not implemented.
+
+Latest comprehensive report:
+
+```text
+reports/Project_Status_19-08-2026_1.md
+```
+
+High-level status:
+
+| Area | Status | Notes |
+|---|---|---|
+| Data registry | Implemented | `artifacts/registry/data_registry.json` describes local assets. |
+| CLIP NumPy index | Implemented | L21 index is expected at `artifacts/indexes/l21_numpy`. |
+| Retrieval UI | Implemented | Visual search, metadata search, pins, history, raw video preview, keyframe neighborhood viewer. |
+| Auto query rewrite | Implemented | Visual search and Q&A event query use Gemini to create English CLIP-ready queries. |
+| Structured retrieval | Implemented, opt-in | CLIP + objects + metadata + attributes + OCR/ASR via `/api/structured-search`. |
+| Object store | Built for L21 | `artifacts/structured/l21_objects.sqlite`, 7,800 frames, 780,000 detections. Raw labels live in `detection_class_entities`. |
+| Attribute/color evidence | Implemented | Useful for constraints such as red shirt or white car. |
+| Phase 5 ASR/OCR | Partially useful | ASR has 563 transcript segments. OCR JSONL exists but current detections are empty. |
+| Phase 6 reranker/planner | Implemented | Local query planner/reranker config exists at `configs/phase6_reranker_v1.json`. |
+| Phase 7 Q&A | Implemented | Evidence-first Q&A, manual review, SQLite session store, export record flow. |
+| Gemini Q&A/VLM | Implemented as option | `Draft with Gemini` sends selected evidence plus related keyframe images to Gemini. |
+| Phase 8 TRAKE | Not implemented | Plan exists in `plan/09_PHASE_8_TRAKE.md`; backend/UI are still TODO. |
+| Phase 9 submission hardening | Started | Internal schema, validator, QA export adapter, runbook are implemented. |
+| FAISS/vector DB | Not implemented | Current retrieval uses NumPy index; FAISS/vector DB remain future optimization. |
+
+Current important local artifacts:
+
+```text
+artifacts/registry/data_registry.json
+artifacts/indexes/l21_numpy/
+artifacts/structured/l21_objects.sqlite
+artifacts/structured/l21_objects_manifest.json
+artifacts/phase5/ocr_l21.jsonl
+artifacts/phase5/asr_l21.jsonl
+artifacts/phase5/phase5_store.sqlite
+artifacts/phase5/stores/phase5_l21.sqlite3
+artifacts/qa/phase7_qa.sqlite3
+artifacts/submissions/
+```
+
+Run the UI:
+
+```powershell
+$env:AIC_CLIP_MODEL_ID="D:\AIC\.cache\huggingface\hub\models--openai--clip-vit-base-patch32\snapshots\3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
+$env:AIC_TRANSLATION_API_KEY="<your-gemini-api-key>"
+$env:AIC_TRANSLATION_PROVIDER="gemini"
+$env:AIC_TRANSLATION_MODEL="gemini-3.5-flash"
+
+python tools\retrieval_ui.py `
+  --registry artifacts\registry\data_registry.json `
+  --index-dir artifacts\indexes\l21_numpy `
+  --groups L21 `
+  --clip-local-files-only `
+  --phase5-store artifacts\phase5\phase5_store.sqlite `
+  --qa-store artifacts\qa\phase7_qa.sqlite3
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+Current test status:
+
+```text
+python -m pytest -q
+188 passed
+```
+
+Known limitations:
+
+- OCR is not yet useful on current L21 artifact because all OCR detections are empty.
+- Q&A candidate retrieval does not yet use structured retrieval by default; it currently uses the Gemini-optimized CLIP event query.
+- Gemini VLM answer drafting requires Internet and a configured Gemini API key.
+- Confirmed Q&A submission export currently produces no candidates until the user confirms/exports Q&A records in the UI.
+- Phase 8 TRAKE has not been implemented.
+- Official contest submission adapter is pending the organizer's final format.
+
 Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. Dự án đang ở giai đoạn đầu: ưu tiên kiểm kê dữ liệu, xác minh mapping, dựng registry và baseline retrieval trước khi làm UI, Q&A, TRAKE hoặc agent.
 
 ## Đọc Gì Trước
@@ -461,7 +546,7 @@ Reranker seed config nằm tại `configs/phase6_reranker_v1.json`. Dùng `tools
 
 ## Phase 7 — Evidence-Grounded Q&A
 
-Phase 7 tạo workflow Q&A có kiểm soát: event query + question → retrieval → evidence pack → answer draft → normalization preview → human review → append-only local audit log. Đây không phải chatbot tự do: không evidence thì không confirm; không OCR/ASR store thì không tạo claim OCR/speech; không có human confirmation thì không có internal export record. LVLM chưa được triển khai và vẫn bị tắt.
+Phase 7 tạo workflow Q&A có kiểm soát: event query + question → retrieval → evidence pack → answer draft → normalization preview → human review → append-only local audit log. Đây không phải chatbot tự do: không evidence thì không confirm; không OCR/ASR store thì không tạo claim OCR/speech; không có human confirmation thì không có internal export record. Gemini VLM draft là tùy chọn trong UI và chỉ dùng selected evidence cùng ảnh keyframe liên quan.
 
 Khởi động UI cùng local Q&A store:
 
@@ -469,7 +554,7 @@ Khởi động UI cùng local Q&A store:
 python tools\retrieval_ui.py --qa-store artifacts\qa\phase7_qa.sqlite3
 ```
 
-Mở UI, dùng phần **Q&A workspace**, chọn evidence, tạo draft và xác nhận thủ công. Internal export chỉ khả dụng sau review `confirmed` hoặc `edited` với evidence frame-level được chọn. Chi tiết test và benchmark: [`docs/PHASE7_TESTING.md`](docs/PHASE7_TESTING.md).
+Mở UI, dùng phần **Q&A workspace**, nhập `Event query` và `Question`, chọn evidence, tạo draft và xác nhận thủ công. Q&A tự rewrite `Event query` thành `Auto CLIP event query` bằng Gemini để retrieve candidate, còn `Question` được giữ nguyên để trả lời theo ngôn ngữ người dùng. Bật **Draft with Gemini** nếu muốn Gemini đọc selected evidence và ảnh keyframe để đề xuất answer. Internal export chỉ khả dụng sau review `confirmed` hoặc `edited` với evidence frame-level được chọn. Chi tiết test và benchmark: [`docs/PHASE7_TESTING.md`](docs/PHASE7_TESTING.md).
 
 ```powershell
 python -m pytest tests\test_qa_schema.py tests\test_qa_evidence.py tests\test_qa_question_router.py tests\test_qa_answering.py tests\test_qa_normalization.py tests\test_qa_confidence.py tests\test_qa_store.py tests\test_qa_workflow.py tests\test_qa_api.py tests\test_qa_ui_static.py tests\test_qa_benchmark.py -q
@@ -477,3 +562,19 @@ python tools\phase7_benchmark.py --queries benchmarks\phase7_qa_queries_v1.json 
 ```
 
 Khi benchmark template chưa được chấm tay, quality metrics sẽ là `null/unavailable`; đây là behavior đúng, không phải metric 0.
+
+## Phase 9 — Submission Hardening
+
+Confirmed or edited Q&A exports can now be converted into an internal submission schema before the final organizer format is known. This keeps retrieval/Q&A separate from contest-specific CSV or JSON adapters.
+
+```powershell
+python tools\export_qa_submissions.py --qa-store artifacts\qa\phase7_qa.sqlite3
+```
+
+Default outputs are written under `artifacts\submissions\`:
+
+- `qa_submission_candidates.jsonl`
+- `qa_submission_candidates.csv`
+- `qa_submission_validation.json`
+
+See [`docs/PHASE9_SUBMISSION_HARDENING.md`](docs/PHASE9_SUBMISSION_HARDENING.md) for schema, validation rules, and the offline checklist.

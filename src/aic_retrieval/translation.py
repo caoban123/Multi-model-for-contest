@@ -105,8 +105,9 @@ def openai_compatible_payload(text: str, model: str) -> dict[str, Any]:
             {
                 "role": "system",
                 "content": (
-                    "Translate Vietnamese video retrieval queries into concise English CLIP search queries. "
-                    "Keep visual nouns, actions, colors, places, and objects. Return only the English query."
+                    "Rewrite video retrieval queries into concise English CLIP search prompts. "
+                    "Preserve visible subjects, actions, objects, colors, clothing, scene, setting, and spatial relations. "
+                    "Prefer concrete visual phrases over abstract wording. Return only the English query."
                 ),
             },
             {"role": "user", "content": text},
@@ -116,9 +117,12 @@ def openai_compatible_payload(text: str, model: str) -> dict[str, Any]:
 
 def gemini_payload(text: str) -> dict[str, Any]:
     prompt = (
-        "Translate this Vietnamese video retrieval query into a concise English CLIP search query. "
-        "Keep visual nouns, actions, colors, places, and objects. Return only the English query.\n\n"
-        f"Vietnamese query: {text}"
+        "Rewrite this video retrieval query into a concise English query optimized for CLIP image/video keyframe search. "
+        "If the input is Vietnamese, translate it. If it is already English, improve it only when needed. "
+        "Keep visible subjects, actions, objects, colors, clothing, scene, setting, and spatial relations. "
+        "Prefer concrete visual phrases over abstract wording. Do not add facts that are not implied by the input. "
+        "Return only the final English CLIP query, with no explanation.\n\n"
+        f"User query: {text}"
     )
     return {
         "contents": [

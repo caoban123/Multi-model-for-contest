@@ -4,7 +4,6 @@ const clipQueryInput = document.querySelector("#clip-query");
 const topKInput = document.querySelector("#top-k");
 const candidatePoolInput = document.querySelector("#candidate-pool");
 const searchButton = document.querySelector("#search-button");
-const translateButton = document.querySelector("#translate-button");
 const exportButton = document.querySelector("#export-button");
 const exportPinsButton = document.querySelector("#export-pins-button");
 const clearHistoryButton = document.querySelector("#clear-history-button");
@@ -63,11 +62,13 @@ const videoDialogMeta = document.querySelector("#video-dialog-meta");
 const closeVideoButton = document.querySelector("#close-video-button");
 const qaForm = document.querySelector("#qa-form");
 const qaEventQueryInput = document.querySelector("#qa-event-query");
+const qaClipEventQueryInput = document.querySelector("#qa-clip-event-query");
 const qaQuestionInput = document.querySelector("#qa-question");
 const qaPrepareButton = document.querySelector("#qa-prepare-button");
 const qaStatusEl = document.querySelector("#qa-status");
 const qaCandidatesEl = document.querySelector("#qa-candidates");
 const qaEvidenceEl = document.querySelector("#qa-evidence");
+const qaUseGeminiInput = document.querySelector("#qa-use-gemini");
 const qaDraftButton = document.querySelector("#qa-draft-button");
 const qaAnswerEl = document.querySelector("#qa-answer");
 const qaFinalAnswerInput = document.querySelector("#qa-final-answer");
@@ -123,9 +124,42 @@ function setQaStatus(message, isError = false) {
   qaStatusEl.classList.toggle("error", isError);
 }
 
+function keyframeUrlFromPath(path) {
+  return path ? `/keyframe?path=${encodeURIComponent(path)}` : null;
+}
+
+function qaEvidenceImageUrl(evidence) {
+  return evidence.payload?.image_url || keyframeUrlFromPath(evidence.payload?.keyframe_path);
+}
+
+function qaCandidateImageUrl(candidate) {
+  const frame = Array.isArray(candidate.frames) ? candidate.frames.find((item) => item?.image_url || item?.keyframe_path) : null;
+  return candidate.image_url || keyframeUrlFromPath(candidate.keyframe_path) || frame?.image_url || keyframeUrlFromPath(frame?.keyframe_path);
+}
+
+function appendQaThumbnail(parent, imageUrl, label) {
+  const thumb = document.createElement("span");
+  thumb.className = "qa-thumb";
+  if (imageUrl) {
+    const img = document.createElement("img");
+    img.src = imageUrl;
+    img.alt = label;
+    img.loading = "lazy";
+    img.addEventListener("error", () => thumb.classList.add("is-missing"), { once: true });
+    thumb.appendChild(img);
+  } else {
+    thumb.classList.add("is-missing");
+  }
+  parent.appendChild(thumb);
+}
+
 function renderQaPayload(payload) {
   qaPayload = payload;
   const pack = payload.evidence_pack || {};
+  const request = payload.session?.request || pack.request || {};
+  const retrievalContext = pack.retrieval_context || {};
+  if (request.event_query) qaEventQueryInput.value = request.event_query;
+  qaClipEventQueryInput.value = retrievalContext.qa_retrieval_query || retrievalContext.query || "";
   const candidates = pack.candidates || [];
   qaCandidatesEl.replaceChildren();
   for (const candidate of candidates) {
@@ -133,6 +167,13 @@ function renderQaPayload(payload) {
     item.className = "qa-item";
     item.textContent = `${candidate.video_id || "Unknown video"} · rank ${candidate.rank ?? "-"}`;
     qaCandidatesEl.appendChild(item);
+    const videoId = candidate.video_id || "Unknown video";
+    const text = document.createElement("span");
+    text.className = "qa-item-text";
+    text.textContent = `${videoId} · rank ${candidate.rank ?? "-"}`;
+    item.replaceChildren();
+    appendQaThumbnail(item, qaCandidateImageUrl(candidate), `${videoId} candidate keyframe`);
+    item.appendChild(text);
   }
   if (!candidates.length) qaCandidatesEl.textContent = "No candidate video was retrieved.";
   qaEvidenceEl.replaceChildren();
@@ -147,6 +188,13 @@ function renderQaPayload(payload) {
     const position = evidence.keyframe_id === null || evidence.keyframe_id === undefined ? "video level" : `keyframe ${evidence.keyframe_id}`;
     label.append(input, document.createTextNode(` ${evidence.modality} · ${evidence.video_id} · ${position} · ${payloadText}`));
     qaEvidenceEl.appendChild(label);
+    const evidenceText = document.createElement("span");
+    evidenceText.className = "qa-item-text";
+    evidenceText.textContent = `${evidence.modality} · ${evidence.video_id} · ${position} · ${payloadText}`;
+    label.replaceChildren();
+    appendQaThumbnail(label, qaEvidenceImageUrl(evidence), `${evidence.video_id} ${position}`);
+    label.append(input, evidenceText);
+    label.insertBefore(input, label.firstChild);
   }
   if (!(pack.evidence_refs || []).length) qaEvidenceEl.textContent = "No source-backed evidence was available.";
   const availability = Object.entries(pack.modality_availability || {}).map(([modality, state]) => `${modality}: ${state}`).join(" · ");
@@ -169,6 +217,7 @@ function renderQaDraft(payload) {
     ["Normalized", draft.normalized_answer || "-"],
     ["Alternatives", (draft.alternative_answers || []).join(" · ") || "-"],
     ["State", draft.confidence_state || "-"],
+    ["Method", draft.generation_method || "-"],
     ["Warnings", (draft.warnings || []).join(" · ") || "-"],
   ];
   for (const [label, value] of fields) {
@@ -224,7 +273,15 @@ function updateQaControls() {
 async function prepareQa() {
   qaPrepareButton.disabled = true;
   try {
-    const payload = await postJson("/api/qa/prepare", { event_query: qaEventQueryInput.value.trim(), question: qaQuestionInput.value.trim() });
+    const eventQuery = qaEventQueryInput.value.trim();
+    const question = qaQuestionInput.value.trim();
+    if (!eventQuery || !question) {
+      return;
+    }
+    setQaStatus("Optimizing event query for CLIP with Gemini...");
+    const retrievalQuery = await autoTranslateClipQuery(eventQuery);
+    qaClipEventQueryInput.value = retrievalQuery;
+    const payload = await postJson("/api/qa/prepare", { event_query: eventQuery, retrieval_query: retrievalQuery, question });
     renderQaPayload(payload);
     refreshQaHistory();
   } catch (error) {
@@ -236,7 +293,11 @@ async function prepareQa() {
 
 async function draftQaAnswer() {
   try {
-    const payload = await postJson("/api/qa/draft-answer", { session_id: qaPayload.session.session_id, selected_evidence_ids: qaSelectedEvidenceIds() });
+    const payload = await postJson("/api/qa/draft-answer", {
+      session_id: qaPayload.session.session_id,
+      selected_evidence_ids: qaSelectedEvidenceIds(),
+      answer_method: qaUseGeminiInput.checked ? "gemini" : "evidence_first",
+    });
     renderQaDraft(payload);
   } catch (error) {
     setQaStatus(error.message, true);
@@ -657,11 +718,32 @@ function closeVideo() {
 async function runSearch(event) {
   event.preventDefault();
   const originalQuery = queryInput.value.trim();
-  const clipQuery = activeMode === "visual" ? clipQueryInput.value.trim() : "";
-  const query = activeMode === "visual" ? clipQuery || originalQuery : originalQuery;
-  if (!query) {
+  if (!originalQuery) {
     queryInput.focus();
     return;
+  }
+  let query = originalQuery;
+  let clipQuery = "";
+  if (activeMode === "visual") {
+    searchButton.disabled = true;
+    const searchButtonLabel = searchButton.innerHTML;
+    searchButton.textContent = "Optimizing query...";
+    setStatus("Optimizing query for CLIP with Gemini...");
+    try {
+      const translated = await autoTranslateClipQuery(originalQuery);
+      query = translated;
+      clipQuery = translated;
+      clipQueryInput.value = translated;
+    } catch (error) {
+      setStatus(error.message, true);
+      searchButton.disabled = false;
+      searchButton.innerHTML = searchButtonLabel;
+      return;
+    }
+    searchButton.disabled = false;
+    searchButton.innerHTML = searchButtonLabel;
+  } else {
+    clipQueryInput.value = "";
   }
   const params = new URLSearchParams({
     q: query,
@@ -768,27 +850,14 @@ function saveHistoryItem(originalQuery, clipQuery, mode, structured = null, fusi
   saveStoredArray(STORAGE_KEYS.history, searchHistory);
 }
 
-async function translateQuery() {
-  const query = queryInput.value.trim();
-  if (!query) {
-    queryInput.focus();
-    return;
+async function autoTranslateClipQuery(query) {
+  const params = new URLSearchParams({ q: query });
+  const payload = await fetchJson(`/api/translate?${params.toString()}`);
+  const translated = String(payload.translated_text || "").trim();
+  if (!translated) {
+    throw new Error("Gemini returned an empty CLIP query.");
   }
-  translateButton.disabled = true;
-  const translateButtonLabel = translateButton.textContent;
-  translateButton.textContent = "Translating...";
-  setStatus("Translating query...");
-  try {
-    const params = new URLSearchParams({ q: query });
-    const payload = await fetchJson(`/api/translate?${params.toString()}`);
-    clipQueryInput.value = payload.translated_text;
-    setStatus(`Translated with ${payload.model}. Review the CLIP query, then search.`);
-  } catch (error) {
-    setStatus(error.message, true);
-  } finally {
-    translateButton.disabled = false;
-    translateButton.textContent = translateButtonLabel;
-  }
+  return translated;
 }
 
 function updateJudgement(target) {
@@ -1385,7 +1454,6 @@ function setMode(mode) {
   metadataModeButton.setAttribute("aria-pressed", String(!isVisual));
   visualModeButton.setAttribute("aria-selected", String(isVisual));
   metadataModeButton.setAttribute("aria-selected", String(!isVisual));
-  translateButton.disabled = !isVisual;
   clipQueryInput.disabled = !isVisual;
   candidatePoolInput.disabled = !isVisual;
   rankingTabs.hidden = !isVisual;
@@ -1471,7 +1539,6 @@ async function loadHealth() {
 }
 
 form.addEventListener("submit", runSearch);
-translateButton.addEventListener("click", translateQuery);
 exportButton.addEventListener("click", exportCsv);
 exportPinsButton.addEventListener("click", exportPinnedCsv);
 clearHistoryButton.addEventListener("click", clearHistory);
