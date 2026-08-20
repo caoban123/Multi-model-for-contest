@@ -21,4 +21,10 @@ def test_trake_workspace_is_separate_and_exposes_required_controls() -> None:
     assert 'trake_answer?.answer_text' in js
     assert 'retrieved_video_id' in js
     assert 'semantic-seed quality and temporal order' in js
+    assert 'id="query-id"' in html
+    assert 'id="hybrid-retrieval"' in html
+    assert 'id="gemini-planner"' in html
+    assert 'hybrid_retrieval:' in js
+    assert 'hybrid_use_gemini:' in js
+    assert '/api/trake/health' in js
     assert 'Q&A workspace' not in html

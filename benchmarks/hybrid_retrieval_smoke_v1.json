@@ -1,0 +1,71 @@
+{
+  "version": "hybrid-retrieval-smoke-v1",
+  "status": "TECHNICAL_FIXTURE_NOT_PROMOTION_GROUND_TRUTH",
+  "description": "Exact and semantic checks derived from current L21 metadata/ASR artifacts. This verifies retriever behavior but must not be used alone to promote hybrid retrieval.",
+  "queries": [
+    {
+      "query_id": "hyb-meta-001",
+      "query_text": "bản tin 60 giây sáng ngày 1 tháng 8 năm 2024",
+      "language": "vi",
+      "category": "metadata_date",
+      "source_types": ["metadata"],
+      "expected_video_ids": ["L21_V001"]
+    },
+    {
+      "query_id": "hyb-meta-002",
+      "query_text": "bản tin 60 giây sáng ngày 31 tháng 8 năm 2024",
+      "language": "vi",
+      "category": "metadata_date",
+      "source_types": ["metadata"],
+      "expected_video_ids": ["L21_V031"]
+    },
+    {
+      "query_id": "hyb-asr-001",
+      "query_text": "tình trạng sụt lún đất ở đồng bằng sông Cửu Long",
+      "language": "vi",
+      "category": "asr_semantic",
+      "source_types": ["asr"],
+      "expected_video_ids": ["L21_V001"]
+    },
+    {
+      "query_id": "hyb-asr-002",
+      "query_text": "trung tâm điều phối ghép tạng quốc gia và ca ghép tim",
+      "language": "vi",
+      "category": "asr_semantic",
+      "source_types": ["asr"],
+      "expected_video_ids": ["L21_V001"]
+    },
+    {
+      "query_id": "hyb-asr-003",
+      "query_text": "một ngọn tháp cổ phủ rêu phong",
+      "language": "vi",
+      "category": "asr_semantic",
+      "source_types": ["asr"],
+      "expected_video_ids": ["L21_V002"]
+    },
+    {
+      "query_id": "hyb-asr-004",
+      "query_text": "nhiệt độ bề mặt tại bến Thượng Hải",
+      "language": "vi",
+      "category": "asr_semantic",
+      "source_types": ["asr"],
+      "expected_video_ids": ["L21_V002"]
+    },
+    {
+      "query_id": "hyb-cross-001",
+      "query_text": "news about a heart transplant coordinated by a national medical center",
+      "language": "en",
+      "category": "cross_lingual_asr",
+      "source_types": ["asr"],
+      "expected_video_ids": ["L21_V001"]
+    },
+    {
+      "query_id": "hyb-cross-002",
+      "query_text": "an ancient tower covered with moss",
+      "language": "en",
+      "category": "cross_lingual_asr",
+      "source_types": ["asr"],
+      "expected_video_ids": ["L21_V002"]
+    }
+  ]
+}

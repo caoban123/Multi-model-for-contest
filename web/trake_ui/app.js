@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 let state = null;
 let selectedChain = null;
 let lastReview = null;
+let hybridAvailable = false;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[char]);
@@ -108,7 +109,20 @@ function selectChain(id) {
   document.querySelectorAll('[data-refine]').forEach(button => button.onclick = () => refineEvent(button.dataset.refine));
 }
 
-$('plan').onclick = async () => { try { const data = await api('plan', {query: $('query').value}); render(data); $('align').disabled = true; message('Plan created; review events before retrieval.'); } catch (error) { message(error.message, true); } };
+$('plan').onclick = async () => {
+  try {
+    const queryId = $('query-id').value.trim();
+    if (!queryId) throw new Error('Query ID is required.');
+    const constraints = {
+      hybrid_retrieval: hybridAvailable && $('hybrid-retrieval').checked,
+      hybrid_use_gemini: $('gemini-planner').checked,
+    };
+    const data = await api('plan', {query_id: queryId, query: $('query').value, constraints});
+    render(data);
+    $('align').disabled = true;
+    message(constraints.hybrid_retrieval ? 'Agent plan created; review event routes before retrieval.' : 'Baseline plan created; review events before retrieval.');
+  } catch (error) { message(error.message, true); }
+};
 $('add-event').onclick = () => { if (state.request.events.length < 5) { const order = state.request.events.length + 1; state.request.events.push({event_id: `e${order}`, order, text: 'new event', clip_query: 'new event', modalities: ['clip'], required: true, object_constraints: [], attribute_constraints: [], ocr_constraints: [], asr_constraints: [], min_gap_seconds: null, max_gap_seconds: null, confidence: 1, source: 'manual'}); render({state}); } };
 $('save-plan').onclick = async () => {
   try {
@@ -151,6 +165,22 @@ $('confirm').onclick = () => review('confirmed');
 $('reject').onclick = () => review('rejected');
 $('export').onclick = async () => { try { await api('export', {session_id: state.session_id, review_id: lastReview.review_id}); message('Internal record exported; this is not the final contest format.'); } catch (error) { message(error.message, true); } };
 
+async function loadHealth() {
+  try {
+    const response = await fetch('/api/trake/health');
+    const health = await response.json();
+    hybridAvailable = Boolean(health.hybrid_retrieval_enabled);
+    $('hybrid-retrieval').disabled = !hybridAvailable;
+    if (!hybridAvailable) $('hybrid-retrieval').checked = false;
+    $('gemini-planner').disabled = !hybridAvailable || !health.gemini_configured;
+    if (!health.gemini_configured) $('gemini-planner').checked = false;
+  } catch (error) {
+    hybridAvailable = false;
+    $('hybrid-retrieval').disabled = true;
+    $('gemini-planner').disabled = true;
+  }
+}
+
 async function replaceEvent(eventId) {
   try { const candidateId = document.querySelector(`[data-replace="${CSS.escape(eventId)}"]`).value; const data = await api('replace', {session_id: state.session_id, chain_id: selectedChain.chain_id, event_id: eventId, candidate_id: candidateId, lock_event: true}); render(data); selectedChain = data.state.manual_chain; message(`${eventId} replaced and locked after invariant validation.`); }
   catch (error) { message(error.message, true); }
@@ -160,3 +190,5 @@ async function refineEvent(eventId) {
   try { const data = await api('refine', {session_id: state.session_id, chain_id: selectedChain.chain_id, event_id: eventId}); message(`${data.refinement.status}: ${data.refinement.reason}`); }
   catch (error) { message(error.message, true); }
 }
+
+loadHealth();

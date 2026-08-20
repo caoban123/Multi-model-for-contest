@@ -44,6 +44,14 @@ def main() -> int:
     parser.add_argument("--clip-model-id", default=os.environ.get("AIC_CLIP_MODEL_ID", DEFAULT_CLIP_MODEL_ID))
     parser.add_argument("--clip-cache-dir", type=Path, default=Path(os.environ["AIC_CLIP_CACHE_DIR"]) if os.environ.get("AIC_CLIP_CACHE_DIR") else None)
     parser.add_argument("--clip-local-files-only", action="store_true")
+    parser.add_argument("--enable-hybrid-retrieval", action="store_true")
+    parser.add_argument("--bge-index-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_bge")
+    parser.add_argument("--bge-model-id", default=os.environ.get("AIC_BGE_MODEL_ID", "BAAI/bge-m3"))
+    parser.add_argument("--bge-model-path", type=Path, default=Path(os.environ["AIC_BGE_MODEL_PATH"]) if os.environ.get("AIC_BGE_MODEL_PATH") else None)
+    parser.add_argument("--bge-device", default=os.environ.get("AIC_BGE_DEVICE"))
+    parser.add_argument("--bm25-index-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_bm25")
+    parser.add_argument("--submission-store", type=Path, default=ROOT / "artifacts" / "submissions" / "submission_sessions.sqlite3")
+    parser.add_argument("--submission-output-dir", type=Path, default=ROOT / "artifacts" / "submissions")
     parser.add_argument(
         "--require-keyframes",
         action="store_true",
@@ -89,6 +97,15 @@ def main() -> int:
         trake_static_dir=ROOT / "web" / "trake_ui",
         trake_refinement_dir=ROOT / "artifacts" / "trake" / "refinement",
         trake_config_path=args.trake_config,
+        hybrid_enabled=args.enable_hybrid_retrieval,
+        bge_index_dir=args.bge_index_dir,
+        bge_model_id=args.bge_model_id,
+        bge_model_path=args.bge_model_path,
+        bge_device=args.bge_device,
+        bm25_index_dir=args.bm25_index_dir,
+        submission_store_path=args.submission_store,
+        submission_output_dir=args.submission_output_dir,
+        submission_static_dir=ROOT / "web" / "submission_ui",
     )
     try:
         server = run_server(config, host=args.host, port=args.port)

@@ -27,6 +27,7 @@
             <span class="control-label">Search channel</span>
             <div class="mode-tabs" role="tablist" aria-label="Search mode">
               <button id="visual-mode-button" class="mode-button is-active" type="button" role="tab" aria-pressed="true" aria-selected="true">Visual</button>
+              <button id="agent-mode-button" class="mode-button" type="button" role="tab" aria-pressed="false" aria-selected="false">Agent</button>
               <button id="metadata-mode-button" class="mode-button" type="button" role="tab" aria-pressed="false" aria-selected="false">Metadata</button>
             </div>
           </div>
@@ -45,6 +46,10 @@
           </div>
 
           <div class="config-row">
+            <label id="agent-query-id-field" class="number-field" hidden>
+              <span>Query ID</span>
+              <input id="agent-query-id" name="agent-query-id" type="text" autocomplete="off" placeholder="query-1-kis">
+            </label>
             <div class="ranking-control">
               <span class="control-label">Results mode</span>
               <div id="ranking-tabs" class="ranking-tabs" role="tablist" aria-label="Visual ranking mode">
@@ -52,7 +57,7 @@
                 <button id="frame-ranking-button" class="mode-button" type="button" role="tab" aria-pressed="false" aria-selected="false">Frame Ranking</button>
               </div>
             </div>
-            <label class="number-field">
+            <label id="candidate-pool-field" class="number-field">
               <span id="top-k-label">Top videos</span>
               <input id="top-k" name="top-k" type="number" min="1" max="50" value="12">
             </label>
@@ -62,6 +67,82 @@
             </label>
             <button id="search-button" class="search-button" type="submit">Search <span aria-hidden="true">→</span></button>
           </div>
+
+          <section id="agent-plan-panel" class="agent-plan-panel" aria-live="polite" hidden>
+            <div class="agent-plan-head">
+              <div>
+                <span class="section-kicker">Agent workspace</span>
+                <strong id="agent-plan-profile">Waiting for query</strong>
+              </div>
+              <div class="agent-plan-actions">
+                <span id="agent-run-state" class="agent-run-state is-idle">Idle</span>
+                <label class="check-field"><input id="agent-use-gemini" type="checkbox" checked> Gemini planner</label>
+              </div>
+            </div>
+
+            <ol id="agent-execution-strip" class="agent-execution-strip" aria-label="Agent execution progress">
+              <li data-agent-stage="analyze"><span>1</span><strong>Analyze</strong><small>Query intent</small></li>
+              <li data-agent-stage="gemini"><span>2</span><strong>Gemini</strong><small>JSON plan</small></li>
+              <li data-agent-stage="retrieve"><span>3</span><strong>Retrieve</strong><small>CLIP / BGE / BM25</small></li>
+              <li data-agent-stage="fuse"><span>4</span><strong>Fuse</strong><small>RRF ranking</small></li>
+              <li data-agent-stage="ready"><span>5</span><strong>Ready</strong><small>Review results</small></li>
+            </ol>
+
+            <div class="agent-inspector-tabs" role="tablist" aria-label="Agent analysis details">
+              <button id="agent-summary-tab" class="agent-inspector-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="agent-summary-panel">Summary</button>
+              <button id="agent-gemini-tab" class="agent-inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="agent-gemini-panel">Gemini output</button>
+              <button id="agent-system-tab" class="agent-inspector-tab" type="button" role="tab" aria-selected="false" aria-controls="agent-system-panel">System trace</button>
+            </div>
+
+            <div id="agent-summary-panel" class="agent-inspector-panel" role="tabpanel" aria-labelledby="agent-summary-tab">
+              <div class="agent-query-grid">
+                <div class="is-clip"><span>CLIP visual query</span><strong id="agent-clip-query">-</strong></div>
+                <div class="is-bge"><span>BGE semantic query</span><strong id="agent-semantic-query">-</strong></div>
+                <div class="is-bm25"><span>BM25 lexical query</span><strong id="agent-lexical-query">-</strong></div>
+              </div>
+              <div id="agent-plan-trace" class="agent-plan-trace"></div>
+              <section id="agent-structured-suggestions" class="agent-structured-suggestions" hidden>
+                <div>
+                  <span class="section-kicker">Structured suggestions</span>
+                  <p id="agent-structured-summary">No explicit structured constraint.</p>
+                </div>
+                <button id="agent-apply-structured" class="secondary-button" type="button">Use in Structured Search</button>
+              </section>
+            </div>
+
+            <div id="agent-gemini-panel" class="agent-inspector-panel" role="tabpanel" aria-labelledby="agent-gemini-tab" hidden>
+              <div class="agent-trace-metrics">
+                <div><span>Status</span><strong id="agent-gemini-status">Not called</strong></div>
+                <div><span>Provider / model</span><strong id="agent-gemini-model">-</strong></div>
+                <div><span>Planning latency</span><strong id="agent-gemini-latency">-</strong></div>
+              </div>
+              <div id="agent-gemini-message" class="agent-inline-message">Run an Agent query to inspect the Gemini response.</div>
+              <div class="agent-code-grid">
+                <section>
+                  <div class="agent-code-head"><strong>Raw model text</strong><button class="agent-copy-button" type="button" data-copy-target="agent-gemini-raw">Copy</button></div>
+                  <pre id="agent-gemini-raw" class="agent-code-output">-</pre>
+                </section>
+                <section>
+                  <div class="agent-code-head"><strong>Parsed JSON</strong><button class="agent-copy-button" type="button" data-copy-target="agent-gemini-parsed">Copy</button></div>
+                  <pre id="agent-gemini-parsed" class="agent-code-output">-</pre>
+                </section>
+              </div>
+            </div>
+
+            <div id="agent-system-panel" class="agent-inspector-panel" role="tabpanel" aria-labelledby="agent-system-tab" hidden>
+              <div id="agent-channel-metrics" class="agent-trace-metrics"></div>
+              <div class="agent-system-grid">
+                <section>
+                  <div class="agent-code-head"><strong>Validated plan used by retrieval</strong><button class="agent-copy-button" type="button" data-copy-target="agent-validated-plan">Copy</button></div>
+                  <pre id="agent-validated-plan" class="agent-code-output">-</pre>
+                </section>
+                <section>
+                  <strong>Normalization and fallback</strong>
+                  <ul id="agent-normalization-notes" class="agent-normalization-notes"><li>No trace yet.</li></ul>
+                </section>
+              </div>
+            </div>
+          </section>
 
           <details id="structured-filters" class="structured-filters">
             <summary>Structured Filters <span>Experimental · opt-in</span></summary>
@@ -173,10 +254,14 @@
           </div>
         </div>
         <form id="qa-form" class="qa-form">
+          <label><span>Query ID</span><input id="qa-query-id" required placeholder="query-3-qa"></label>
           <label><span>Event query</span><input id="qa-event-query" required placeholder="một người đứng cạnh biển hiệu"></label>
           <label><span>Auto CLIP event query</span><input id="qa-clip-event-query" readonly placeholder="generated automatically for Q&A retrieval"></label>
           <label><span>Question</span><input id="qa-question" required placeholder="Biển hiệu ghi gì?"></label>
-          <button id="qa-prepare-button" class="search-button" type="submit">Prepare evidence</button>
+          <div class="qa-prepare-actions">
+            <label class="check-field"><input id="qa-use-agent-retrieval" type="checkbox" checked> Agent hybrid retrieval</label>
+            <button id="qa-prepare-button" class="search-button" type="submit">Prepare evidence</button>
+          </div>
         </form>
         <div id="qa-status" class="qa-status" aria-live="polite">Prepare a Q&amp;A request to inspect candidate evidence.</div>
         <div class="qa-columns">

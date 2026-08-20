@@ -4,7 +4,7 @@
 <body>
 <main>
   <header><p class="eyebrow">PHASE 8 · L21 · LOCAL</p><h1>TRAKE workspace</h1><p>Giai đoạn 1: truy xuất đúng một video. Giai đoạn 2: căn chỉnh một semantic keyframe cho từng event trong chính video đó.</p></header>
-  <section class="query-bar"><label>Truy vấn chuỗi<input id="query" placeholder="Cửa mở → một người bước vào"></label><button id="plan">Tách events</button><button id="search" disabled>Retrieve</button><button id="align" disabled>Align timeline</button></section>
+  <section class="query-bar"><label>Query ID<input id="query-id" value="query-1-trake" placeholder="query-1-trake"></label><label>Truy vấn chuỗi<input id="query" placeholder="Cửa mở → một người bước vào"></label><div class="query-options"><label><input id="hybrid-retrieval" type="checkbox" checked> Agent hybrid</label><label><input id="gemini-planner" type="checkbox" checked> Gemini planner</label></div><button id="plan">Tách events</button><button id="search" disabled>Retrieve</button><button id="align" disabled>Align timeline</button></section>
   <p id="message" role="status"></p>
   <section class="workspace">
     <article><div class="title-row"><h2>Event editor</h2><button id="add-event" disabled>+ Event</button><button id="save-plan" disabled>Save revision</button></div><div id="events" class="events"></div><p class="hint">Sửa nội dung/required; dùng ↑, xóa hoặc thêm rồi lưu plan revision mới.</p></article>

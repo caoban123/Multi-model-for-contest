@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AIC Submission Workspace</title>
+  <link rel="stylesheet" href="/submission/static/styles.css">
+</head>
+<body>
+  <main>
+    <header class="topbar">
+      <div><span class="kicker">PHASE 9</span><h1>Submission workspace</h1></div>
+      <div class="session-state"><span id="session-status">No session</span><code id="session-id">-</code></div>
+      <div class="top-actions">
+        <button id="start-button" type="button">Start</button>
+        <button id="validate-button" class="secondary" type="button" disabled>Validate</button>
+        <button id="done-button" type="button" disabled>Done</button>
+        <a id="download-link" class="button-link disabled" aria-disabled="true">Download ZIP</a>
+      </div>
+    </header>
+
+    <p id="message" class="message" role="status">Start a submission session.</p>
+
+    <section class="workspace">
+      <aside class="queue-panel">
+        <div class="section-head"><div><span class="kicker">SESSION</span><h2>Submission queue</h2></div><span id="queue-count" class="count">0</span></div>
+        <div id="queue" class="queue-list"><p class="empty">No confirmed query.</p></div>
+      </aside>
+
+      <section class="agent-panel">
+        <div class="section-head"><div><span class="kicker">QUERY</span><h2>Agent review</h2></div></div>
+        <form id="agent-form" class="agent-form">
+          <label><span>Query ID</span><input id="query-id" required placeholder="query-1-kis"></label>
+          <fieldset class="task-control"><legend>Task</legend><label><input type="radio" name="task" value="KIS" checked> KIS</label><label><input type="radio" name="task" value="QA"> Q&amp;A</label><label><input type="radio" name="task" value="TRAKE"> TRAKE</label></fieldset>
+          <label class="query-field"><span>Query</span><textarea id="query" required rows="3" placeholder="person wearing a red shirt"></textarea></label>
+          <div class="agent-options"><label><input id="use-hybrid" type="checkbox" checked> Hybrid retrieval</label><label><input id="use-gemini" type="checkbox" checked> Gemini planner</label></div>
+          <div id="workflow-import" class="workflow-import" hidden>
+            <label><span>Reviewed workflow session</span><input id="workflow-session-id" placeholder="qa-... or trake-..."></label>
+            <label><span>Confirmed review ID</span><input id="workflow-review-id" placeholder="review-..."></label>
+            <label><span id="official-frames-label">Official frame ID</span><input id="workflow-frame-ids" placeholder="1450"></label>
+          </div>
+          <button id="run-button" type="submit" disabled>Run Agent</button>
+        </form>
+        <div id="agent-trace" class="agent-trace" hidden></div>
+        <section id="agent-inspector" class="agent-inspector" hidden aria-live="polite">
+          <div class="inspector-head">
+            <div><span class="kicker">AGENT ANALYSIS</span><h2 id="agent-profile">Waiting for query</h2></div>
+            <span id="gemini-state" class="state-badge">Not called</span>
+          </div>
+          <div class="routed-queries">
+            <div class="clip-route"><span>CLIP visual query</span><strong id="clip-route">-</strong></div>
+            <div class="bge-route"><span>BGE semantic query</span><strong id="bge-route">-</strong></div>
+            <div class="bm25-route"><span>BM25 lexical query</span><strong id="bm25-route">-</strong></div>
+          </div>
+          <details class="gemini-details">
+            <summary>Gemini output and validated system plan</summary>
+            <div class="gemini-meta"><span id="gemini-model">-</span><span id="gemini-latency">-</span></div>
+            <div id="gemini-warning" class="gemini-warning" hidden></div>
+            <div class="code-columns">
+              <section><strong>Raw model text</strong><pre id="gemini-raw">-</pre></section>
+              <section><strong>Parsed JSON</strong><pre id="gemini-parsed">-</pre></section>
+              <section><strong>Validated plan</strong><pre id="validated-plan">-</pre></section>
+            </div>
+          </details>
+        </section>
+        <div id="candidates" class="candidate-list"><p class="empty">No candidate result.</p></div>
+        <div class="confirm-bar"><span id="selection-count">0 selected</span><button id="confirm-button" type="button" disabled>Confirm to queue</button></div>
+      </section>
+
+      <aside class="validation-panel">
+        <div class="section-head"><div><span class="kicker">OFFICIAL</span><h2>Validation</h2></div></div>
+        <div id="validation-summary" class="validation-summary">Not validated</div>
+        <div id="issues" class="issue-list"></div>
+        <label class="preview-field"><span>CSV preview</span><textarea id="csv-preview" readonly rows="12" spellcheck="false"></textarea></label>
+      </aside>
+    </section>
+  </main>
+  <script src="/submission/static/app.js"></script>
+</body>
+</html>

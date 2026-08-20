@@ -36,6 +36,12 @@ from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
 from aic_retrieval.translation import DEFAULT_GEMINI_API_URL, ExternalTranslator, TranslationConfig
 from aic_retrieval.phase5_store import Phase5SearchService
 from aic_retrieval.query_planner import RuleBasedQueryPlanner
+from aic_retrieval.hybrid_query_planner import HybridQueryPlanner
+from aic_retrieval.hybrid_engine import HybridRetrievalEngine
+from aic_retrieval.rrf_fusion import RrfFusionConfig
+from aic_retrieval.clip_retriever import ClipRetriever
+from aic_retrieval.bge_retriever import BgeEncoder, BgeRetriever
+from aic_retrieval.bm25_retriever import Bm25Retriever
 from aic_retrieval.reranking import RerankerConfig, load_reranker_config, rerank_video_results, reranker_metadata, with_top_n
 from aic_retrieval.qa_schema import AvailabilityStatus, EvidenceModality, QaRequest, ReviewDecision
 from aic_retrieval.qa_workflow import QaWorkflow, jsonable, state_payload
@@ -46,6 +52,9 @@ from aic_retrieval.trake_workflow import TrakeDomainError, TrakeWorkflow
 from aic_retrieval.trake_store import TrakeStore
 from aic_retrieval.trake_refinement import DenseRefiner, DenseWindowExpander
 from aic_retrieval.trake_config import TrakeRuntimeConfig, load_trake_config
+from aic_retrieval.trake_hybrid import retrieve_trake_hybrid_channels
+from aic_retrieval.submission_official import OfficialPrediction, OfficialQuery
+from aic_retrieval.submission_session import SubmissionSessionStore
 from aic_retrieval.provenance import fingerprint_json
 
 
@@ -81,12 +90,32 @@ class RetrievalUiConfig:
     trake_static_dir: Path | None = None
     trake_refinement_dir: Path | None = None
     trake_config_path: Path | None = None
+    hybrid_enabled: bool = False
+    bge_index_dir: Path | None = None
+    bge_model_id: str = "BAAI/bge-m3"
+    bge_model_path: Path | None = None
+    bge_device: str | None = None
+    bm25_index_dir: Path | None = None
+    submission_store_path: Path | None = None
+    submission_output_dir: Path | None = None
+    submission_static_dir: Path | None = None
 
 
 class TimedEventResults(dict[str, list[dict[str, Any]]]):
-    def __init__(self, values: dict[str, list[dict[str, Any]]], stage_timings_ms: dict[str, float]) -> None:
+    def __init__(
+        self,
+        values: dict[str, list[dict[str, Any]]],
+        stage_timings_ms: dict[str, float],
+        *,
+        query_plans: dict[str, dict[str, Any]] | None = None,
+        hybrid_failures: dict[str, dict[str, str]] | None = None,
+        skipped_without_frame: dict[str, dict[str, int]] | None = None,
+    ) -> None:
         super().__init__(values)
         self.stage_timings_ms = stage_timings_ms
+        self.query_plans = query_plans or {}
+        self.hybrid_failures = hybrid_failures or {}
+        self.skipped_without_frame = skipped_without_frame or {}
 
 
 class RetrievalUiService:
@@ -129,6 +158,8 @@ class RetrievalUiService:
         self.attribute_service = ColorAttributeService(config.repo_root, self.refs)
         self.phase5_service = Phase5SearchService(config.phase5_store_path, self.refs) if config.phase5_store_path else None
         self.query_planner = RuleBasedQueryPlanner()
+        self.hybrid_query_planner = HybridQueryPlanner(config.translation)
+        self.hybrid_engine = self._build_hybrid_engine() if config.hybrid_enabled else None
         self.reranker_config = load_reranker_config(config.phase6_config_path) if config.phase6_config_path and config.phase6_config_path.is_file() else RerankerConfig()
         phase6_payload = json.loads(config.phase6_config_path.read_text(encoding="utf-8")) if config.phase6_config_path and config.phase6_config_path.is_file() else {}
         self.rrf_config = RrfConfig(**phase6_payload.get("fusion", {}))
@@ -139,6 +170,10 @@ class RetrievalUiService:
         )
         self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs, self.attribute_service, self.phase5_service)
         self.qa_workflow = QaWorkflow(store=QaStore(config.qa_store_path) if config.qa_store_path else None)
+        self.submission_store = (
+            SubmissionSessionStore(config.submission_store_path, config.submission_output_dir or config.repo_root / "artifacts" / "submissions")
+            if config.submission_store_path else None
+        )
         retrieval_settings = self.trake_runtime_config.retrieval
         modality_availability = {
             "clip": Availability.AVAILABLE if retrieval_settings.clip_enabled else Availability.UNAVAILABLE,
@@ -191,15 +226,32 @@ class RetrievalUiService:
     def _trake_retrieve_request(self, request: TrakeRequest, pool_size: int) -> dict[str, list[dict[str, Any]]]:
         query_entries: list[tuple[str, str]] = []
         event_by_id = {event.event_id: event for event in request.events}
+        hybrid_requested = bool(request.constraints.get("hybrid_retrieval"))
+        hybrid_active = hybrid_requested and self.hybrid_engine is not None
+        use_gemini = bool(request.constraints.get("hybrid_use_gemini", True))
+        hybrid_plans = {
+            event.event_id: self.hybrid_query_planner.plan(event.text, use_gemini=use_gemini)
+            for event in request.events
+        } if hybrid_active else {}
+        hybrid_failures: dict[str, dict[str, str]] = {}
+        skipped_without_frame: dict[str, dict[str, int]] = {}
+        if hybrid_requested and not hybrid_active:
+            hybrid_failures["request"] = {"hybrid": "Hybrid retrieval is not enabled; TRAKE used its baseline retriever."}
         if self.trake_runtime_config.retrieval.clip_enabled:
             for event in request.events:
                 if "clip" not in event.modalities:
                     continue
-                variants = (
-                    tuple(dict.fromkeys((event.visual_query or event.clip_query, *event.query_variants)))
-                    if self.trake_runtime_config.features.query_variants
-                    else (event.visual_query or event.clip_query,)
-                )
+                hybrid_plan = hybrid_plans.get(event.event_id)
+                if hybrid_plan is not None:
+                    if "clip" not in hybrid_plan.enabled_retrievers:
+                        continue
+                    variants = (hybrid_plan.visual_clip_query_en,)
+                else:
+                    variants = (
+                        tuple(dict.fromkeys((event.visual_query or event.clip_query, *event.query_variants)))
+                        if self.trake_runtime_config.features.query_variants
+                        else (event.visual_query or event.clip_query,)
+                    )
                 query_entries.extend((event.event_id, variant) for variant in variants if variant.strip())
         clip_by_event: dict[str, list[tuple[str, list[Any]]]] = {event.event_id: [] for event in request.events}
         embedding_ms = 0.0
@@ -239,18 +291,49 @@ class RetrievalUiService:
                 clip_by_event[event_id].append((variant, results))
         timing_sink = {"fusion": 0.0}
         channel_started = time.perf_counter()
-        values = {
-            event_id: self._trake_retrieve_event(event, pool_size, clip_by_event.get(event_id, []), timing_sink=timing_sink)
-            for event_id, event in event_by_id.items()
-        }
+        if hybrid_active:
+            values = {
+                event_id: self._trake_retrieve_event(
+                    event,
+                    pool_size,
+                    clip_by_event.get(event_id, []),
+                    timing_sink=timing_sink,
+                    hybrid_plan=hybrid_plans.get(event_id),
+                    hybrid_failure_sink=hybrid_failures,
+                    skipped_without_frame_sink=skipped_without_frame,
+                    query_id=request.query_id,
+                )
+                for event_id, event in event_by_id.items()
+            }
+        else:
+            values = {
+                event_id: self._trake_retrieve_event(
+                    event,
+                    pool_size,
+                    clip_by_event.get(event_id, []),
+                    timing_sink=timing_sink,
+                )
+                for event_id, event in event_by_id.items()
+            }
         channel_ms = (time.perf_counter() - channel_started) * 1000
         return TimedEventResults(values, {
             "embedding": round(embedding_ms, 3),
             "retrieval": round(vector_search_ms + max(0.0, channel_ms - timing_sink["fusion"]), 3),
             "fusion": round(timing_sink["fusion"], 3),
-        })
+        }, query_plans={key: value.to_dict() for key, value in hybrid_plans.items()}, hybrid_failures=hybrid_failures, skipped_without_frame=skipped_without_frame)
 
-    def _trake_retrieve_event(self, event: TrakeEvent, pool_size: int, clip_results: list[tuple[str, list[Any]]] | None = None, timing_sink: dict[str, float] | None = None) -> list[dict[str, Any]]:
+    def _trake_retrieve_event(
+        self,
+        event: TrakeEvent,
+        pool_size: int,
+        clip_results: list[tuple[str, list[Any]]] | None = None,
+        timing_sink: dict[str, float] | None = None,
+        *,
+        hybrid_plan: Any | None = None,
+        hybrid_failure_sink: dict[str, dict[str, str]] | None = None,
+        skipped_without_frame_sink: dict[str, dict[str, int]] | None = None,
+        query_id: str = "trake-event",
+    ) -> list[dict[str, Any]]:
         fused: dict[tuple[str, int], dict[str, Any]] = {}
         ref_by_key = self.structured_generator.ref_by_key
 
@@ -307,10 +390,40 @@ class RetrievalUiService:
             if routing_enabled and "asr" in event.modalities and settings.asr_enabled:
                 for row in self.phase5_service.search_asr(event.clip_query,pool_size):
                     if row.get("keyframe_id") is not None: add(row["video_id"],int(row["keyframe_id"]),"asr",int(row["asr_rank"]),float(row["asr_score"]),row)
+        if hybrid_plan is not None and self.hybrid_engine is not None:
+            hybrid = retrieve_trake_hybrid_channels(
+                self.hybrid_engine,
+                hybrid_plan,
+                query_id=f"{query_id}:{event.event_id}",
+                groups=tuple(sorted(self.config.groups)),
+                top_k=pool_size,
+            )
+            if hybrid_failure_sink is not None and hybrid.failures:
+                hybrid_failure_sink[event.event_id] = dict(hybrid.failures)
+            if skipped_without_frame_sink is not None:
+                skipped_without_frame_sink[event.event_id] = dict(hybrid.skipped_without_frame)
+            for retriever_name, hits in hybrid.hits.items():
+                seen_frames: set[tuple[str, int]] = set()
+                for hit in hits:
+                    frame_key = (hit.video_id, int(hit.keyframe_id))
+                    if frame_key in seen_frames:
+                        continue
+                    seen_frames.add(frame_key)
+                    add(
+                        hit.video_id,
+                        int(hit.keyframe_id),
+                        retriever_name,
+                        int(hit.rank),
+                        float(hit.raw_score),
+                        {**hit.to_dict(), "query_plan": hybrid_plan.to_dict()},
+                    )
         fusion_started = time.perf_counter()
         ordered=sorted(fused.values(),key=lambda item:(-item["rrf_score"],item["video_id"],item["keyframe_id"]))[:pool_size]
         for rank,item in enumerate(ordered,1):
-            method = "rank_fusion_existing_channels_v2" if self.trake_runtime_config.algorithm == "trake_v2" else "rank_fusion_existing_channels_v1"
+            if hybrid_plan is not None:
+                method = "rank_fusion_hybrid_event_v1"
+            else:
+                method = "rank_fusion_existing_channels_v2" if self.trake_runtime_config.algorithm == "trake_v2" else "rank_fusion_existing_channels_v1"
             item.update({"rank":rank,"score":item["rrf_score"],"retrieval_method":method})
             for modality, raw_score in item["raw_modality_scores"].items():
                 item[f"{modality}_score"] = raw_score
@@ -567,6 +680,47 @@ class RetrievalUiService:
     def query_plan(self, query: str) -> dict[str, Any]:
         return self.query_planner.plan(query).to_dict()
 
+    def agent_query_plan(self, query: str, use_gemini: bool = True) -> dict[str, Any]:
+        return self.hybrid_query_planner.plan(query, use_gemini=use_gemini).to_dict()
+
+    def agent_search(
+        self,
+        query_id: str,
+        query: str,
+        top_k: int = DEFAULT_TOP_K_VIDEOS,
+        use_gemini: bool = True,
+        strict: bool = False,
+    ) -> dict[str, Any]:
+        if self.hybrid_engine is None:
+            raise ValueError("hybrid retrieval is disabled; start the UI with --enable-hybrid-retrieval")
+        query_id = query_id.strip()
+        if not query_id:
+            raise ValueError("query_id must not be empty")
+        top_k = max(1, min(top_k, 50))
+        planning = self.hybrid_query_planner.plan_with_trace(query, use_gemini=use_gemini)
+        plan = planning.plan
+        response = self.hybrid_engine.search(
+            query_id,
+            plan,
+            groups=tuple(sorted(self.config.groups)),
+            top_k=top_k,
+            strict=strict,
+        )
+        enriched = []
+        for result in response["results"]:
+            keyframe_path = self._hybrid_keyframe_path(result["video_id"], result.get("keyframe_id"))
+            enriched.append(self.enrich_result({**result, "score": result["raw_score"], "keyframe_path": keyframe_path}))
+        return {
+            **response,
+            "mode": "agent_hybrid",
+            "agent_workspace_version": "agent-workspace-v2",
+            "agent_trace": planning.trace.to_dict(),
+            "default_search_unchanged": True,
+            "top_k": top_k,
+            "results": enriched,
+            "video_results": enriched,
+        }
+
     def qa_prepare(
         self,
         query_id: str,
@@ -575,14 +729,23 @@ class RetrievalUiService:
         selected_video_id: str | None = None,
         selected_frame_id: int | None = None,
         retrieval_query: str | None = None,
+        use_hybrid_retrieval: bool = False,
+        use_gemini_planner: bool = True,
     ) -> dict[str, Any]:
         request = QaRequest(query_id, event_query, question, selected_video_id, selected_frame_id)
         search_query = (retrieval_query or event_query).strip()
-        response = self._qa_selected_response(request) if selected_video_id else self.search(search_query, top_k=12, candidate_pool=40)
+        if selected_video_id:
+            response = self._qa_selected_response(request)
+        elif use_hybrid_retrieval:
+            response = self.agent_search(query_id, event_query, top_k=12, use_gemini=use_gemini_planner)
+            search_query = str(response.get("query_plan", {}).get("visual_clip_query_en") or event_query)
+        else:
+            response = self.search(search_query, top_k=12, candidate_pool=40)
         response = {
             **response,
             "qa_event_query": event_query,
             "qa_retrieval_query": search_query,
+            "qa_hybrid_retrieval": use_hybrid_retrieval,
             "index_schema_version": self.index_metadata.get("index_schema_version"),
             "index_fingerprint": self.index_metadata.get("feature_source_fingerprint"),
             "phase5_store_version": "phase5-store-v1" if getattr(self, "phase5_service", None) and self.phase5_service.available else None,
@@ -847,6 +1010,233 @@ class RetrievalUiService:
             )
         return self.encoder
 
+    def _hybrid_keyframe_path(self, video_id: str, keyframe_id: int | None) -> str | None:
+        if keyframe_id is None:
+            return None
+        ref = next((item for item in self.refs_by_video.get(video_id, ()) if item.keyframe_id == keyframe_id), None)
+        return ref.keyframe_path if ref else None
+
+    def _build_hybrid_engine(self) -> HybridRetrievalEngine:
+        factories = {
+            "clip": lambda: ClipRetriever(
+                self.config.repo_root,
+                self.config.index_dir,
+                self.config.registry_path,
+                self._encoder(),
+                groups=tuple(sorted(self.config.groups)),
+                allow_stale_index=self.config.allow_stale_index,
+            )
+        }
+        if self.config.bm25_index_dir and (self.config.bm25_index_dir / "manifest.json").is_file():
+            bm25_index_dir = self.config.bm25_index_dir
+            factories["bm25"] = lambda: Bm25Retriever(self.config.repo_root, bm25_index_dir)
+        if self.config.bge_index_dir and (self.config.bge_index_dir / "manifest.json").is_file():
+            bge_index_dir = self.config.bge_index_dir
+            factories["bge"] = lambda: BgeRetriever(
+                self.config.repo_root,
+                bge_index_dir,
+                BgeEncoder(
+                    self.config.bge_model_id,
+                    model_path=self.config.bge_model_path,
+                    local_files_only=True,
+                    device=self.config.bge_device,
+                ),
+            )
+        return HybridRetrievalEngine(factories, RrfFusionConfig(rrf_k=60, candidate_pool=200))
+
+    def submission_start(self) -> dict[str, Any]:
+        return self._submission_store().start()
+
+    def submission_session(self, session_id: str) -> dict[str, Any]:
+        return self._submission_store().get(session_id)
+
+    def submission_agent_run(
+        self,
+        session_id: str,
+        query_id: str,
+        task: str,
+        query: str,
+        *,
+        use_hybrid: bool = True,
+        use_gemini: bool = True,
+    ) -> dict[str, Any]:
+        session = self._submission_store().get(session_id)
+        if session["status"] != "ACTIVE":
+            raise ValueError("submission session is not ACTIVE")
+        normalized_task = task.strip().upper()
+        if normalized_task != "KIS":
+            raise ValueError("submission Agent run currently supports KIS; Q&A and TRAKE require their reviewed workflow adapters")
+        if use_hybrid and self.hybrid_engine is not None:
+            response = self.agent_search(query_id, query, top_k=30, use_gemini=use_gemini)
+        else:
+            response = self.search(query, top_k=30, candidate_pool=100)
+        candidates = []
+        for result in response.get("video_results") or response.get("results") or []:
+            keyframe_id = result.get("keyframe_id", result.get("best_keyframe_id"))
+            frame_idx = result.get("frame_idx", result.get("best_frame_idx"))
+            pts_time = result.get("pts_time", result.get("best_pts_time"))
+            keyframe_path = result.get("keyframe_path", result.get("best_keyframe_path"))
+            candidates.append({
+                "candidate_id": f"{query_id}:r{result.get('rank', len(candidates) + 1)}",
+                "rank": result.get("rank", len(candidates) + 1),
+                "video_id": result.get("video_id"),
+                "keyframe_id": keyframe_id,
+                "frame_idx": frame_idx,
+                "pts_time": pts_time,
+                "image_url": result.get("image_url") or (f"/keyframe?path={keyframe_path}" if keyframe_path else None),
+                "video_url": result.get("video_url"),
+                "metadata": result.get("metadata", {}),
+                "source_type": result.get("source_type"),
+                "matched_text": result.get("matched_text"),
+                "official_frame_id": None,
+                "mapping_status": "REQUIRES_MANUAL_OFFICIAL_FRAME_ID",
+                "retrieval": {
+                    "score": result.get("score", result.get("raw_score")),
+                    "provenance": result.get("provenance", {}),
+                },
+            })
+        return {
+            "schema_version": "submission-agent-result-v1",
+            "session_id": session_id,
+            "query_id": query_id,
+            "task": "KIS",
+            "query": query,
+            "status": "READY_FOR_REVIEW" if candidates else "NO_CANDIDATES",
+            "mapping_warning": "frame_idx/keyframe_id are retrieval diagnostics, not confirmed official frame_id values",
+            "agent_plan": response.get("query_plan"),
+            "agent_trace": response.get("agent_trace"),
+            "channel_hit_counts": response.get("channel_hit_counts", {}),
+            "latency_ms": response.get("latency_ms", {}),
+            "health": response.get("health", {}),
+            "failures": response.get("failures", {}),
+            "candidates": candidates,
+        }
+
+    def submission_confirm(
+        self,
+        session_id: str,
+        query_id: str,
+        task: str,
+        predictions: list[dict[str, Any]],
+        *,
+        event_count: int | None = None,
+        source: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        official_predictions = []
+        mapping_sources = []
+        for row in predictions:
+            frame_values = row.get("frame_ids")
+            if frame_values is None and row.get("frame_id") is not None:
+                frame_values = [row["frame_id"]]
+            if not isinstance(frame_values, list):
+                raise ValueError("prediction frame_ids must be a list")
+            official_predictions.append(OfficialPrediction(
+                str(row.get("video_id") or ""),
+                tuple(parse_official_frame_id(value) for value in frame_values),
+                str(row["answer"]) if row.get("answer") is not None else None,
+            ))
+            mapping_sources.append(str(row.get("mapping_source") or ""))
+        official_query = OfficialQuery(query_id, task, tuple(official_predictions), event_count)
+        return self._submission_store().confirm_query(
+            session_id,
+            official_query,
+            mapping_sources=tuple(mapping_sources),
+            source=source,
+        )
+
+    def submission_remove(self, session_id: str, query_id: str) -> dict[str, Any]:
+        return self._submission_store().remove_query(session_id, query_id)
+
+    def submission_import_qa(
+        self,
+        submission_session_id: str,
+        qa_session_id: str,
+        review_id: str,
+        official_frame_id: int,
+        mapping_source: str,
+    ) -> dict[str, Any]:
+        state = self.qa_workflow.get(qa_session_id)
+        review = next((item for item in state.reviews if item.review_id == review_id), None)
+        if review is None:
+            raise ValueError("Q&A review_id was not created in this session")
+        if review.decision not in {ReviewDecision.CONFIRMED, ReviewDecision.EDITED}:
+            raise ValueError("Q&A submission import requires a confirmed or edited review")
+        if not review.final_answer:
+            raise ValueError("Q&A confirmed review has no final answer")
+        evidence_by_id = {item.evidence_id: item for item in state.pack.evidence_refs}
+        frame_ref = next(
+            (
+                evidence_by_id[item]
+                for item in review.selected_evidence_refs
+                if item in evidence_by_id and evidence_by_id[item].keyframe_id is not None
+            ),
+            None,
+        )
+        if frame_ref is None:
+            raise ValueError("Q&A submission import requires selected frame-level evidence")
+        query = OfficialQuery(
+            state.session.request.query_id,
+            "QA",
+            (OfficialPrediction(frame_ref.video_id, (official_frame_id,), review.final_answer),),
+        )
+        return self._submission_store().confirm_query(
+            submission_session_id,
+            query,
+            mapping_sources=(mapping_source,),
+            source={
+                "workflow": "phase7_qa",
+                "qa_session_id": qa_session_id,
+                "review_id": review_id,
+                "selected_evidence_ids": list(review.selected_evidence_refs),
+            },
+        )
+
+    def submission_import_trake(
+        self,
+        submission_session_id: str,
+        trake_session_id: str,
+        review_id: str,
+        official_frame_ids: list[int],
+        mapping_source: str,
+    ) -> dict[str, Any]:
+        internal = self.trake_workflow.export(trake_session_id, review_id)["export"]
+        events = list(internal.get("events") or [])
+        if not internal.get("human_confirmed") or not internal.get("same_video") or not internal.get("temporally_ordered"):
+            raise ValueError("TRAKE submission import requires a confirmed valid same-video chain")
+        if len(official_frame_ids) != len(events):
+            raise ValueError(f"TRAKE requires exactly {len(events)} official frame_ids")
+        query = OfficialQuery(
+            str(internal["query_id"]),
+            "TRAKE",
+            (OfficialPrediction(str(internal["video_id"]), tuple(official_frame_ids)),),
+            event_count=len(events),
+        )
+        return self._submission_store().confirm_query(
+            submission_session_id,
+            query,
+            mapping_sources=(mapping_source,),
+            source={
+                "workflow": "phase8_trake",
+                "trake_session_id": trake_session_id,
+                "review_id": review_id,
+                "event_ids": [item.get("event_id") for item in events],
+            },
+        )
+
+    def submission_validate(self, session_id: str) -> dict[str, Any]:
+        return self._submission_store().validate(session_id)
+
+    def submission_done(self, session_id: str) -> dict[str, Any]:
+        return self._submission_store().done(session_id)
+
+    def submission_zip_path(self, session_id: str) -> Path:
+        return self._submission_store().zip_path(session_id)
+
+    def _submission_store(self) -> SubmissionSessionStore:
+        if self.submission_store is None:
+            raise ValueError("submission persistence is not configured")
+        return self.submission_store
+
 
 def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServer:
     service = RetrievalUiService(config)
@@ -858,6 +1248,10 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             parsed = urlparse(self.path)
             if parsed.path == "/":
                 self._serve_static("index.html")
+            elif parsed.path == "/submission" or parsed.path == "/submission/":
+                self._serve_submission_static("index.html")
+            elif parsed.path.startswith("/submission/static/"):
+                self._serve_submission_static(parsed.path.removeprefix("/submission/static/"))
             elif parsed.path == "/trake" or parsed.path == "/trake/":
                 self._serve_trake_static("index.html")
             elif parsed.path.startswith("/trake/static/"):
@@ -883,14 +1277,29 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "ocr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.available),
                         "asr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.available),
                         "query_planner_available": True,
+                        "hybrid_retrieval_enabled": service.hybrid_engine is not None,
+                        "hybrid_planner_gemini_configured": service.hybrid_query_planner.gemini_configured,
+                        "hybrid_retrievers_configured": sorted(service.hybrid_engine.factories) if service.hybrid_engine else [],
                         "reranker_available": True,
                         "qa_available": hasattr(service, "qa_prepare"),
                         "qa_persistence": "sqlite" if getattr(service, "qa_workflow", None) and service.qa_workflow.store else "memory_until_p7_5",
                         "trake_available": hasattr(service, "trake_plan"),
                         "trake_scope": "L21",
                         "trake_vlm_enabled": bool(getattr(getattr(service, "trake_runtime_config", None), "vlm", None) and service.trake_runtime_config.vlm.enabled),
+                        "submission_available": getattr(service, "submission_store", None) is not None,
                     }
                 )
+            elif parsed.path.startswith("/api/submission/session/") and parsed.path.endswith("/download"):
+                session_id = parsed.path.removeprefix("/api/submission/session/").removesuffix("/download").strip("/")
+                self._serve_submission_zip(session_id)
+            elif parsed.path.startswith("/api/submission/session/"):
+                session_id = parsed.path.removeprefix("/api/submission/session/").strip("/")
+                try:
+                    self._json(service.submission_session(session_id))
+                except KeyError as exc:
+                    self._error(HTTPStatus.NOT_FOUND, str(exc))
+                except ValueError as exc:
+                    self._error(HTTPStatus.BAD_REQUEST, str(exc))
             elif parsed.path == "/api/search":
                 self._handle_search(parsed.query)
             elif parsed.path == "/api/structured-search":
@@ -903,6 +1312,10 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._handle_translate(parsed.query)
             elif parsed.path == "/api/query-plan":
                 self._handle_query_plan(parsed.query)
+            elif parsed.path == "/api/agent-plan":
+                self._handle_agent_plan(parsed.query)
+            elif parsed.path == "/api/agent-search":
+                self._handle_agent_search(parsed.query)
             elif parsed.path.startswith("/api/qa/session/"):
                 self._handle_qa_session(parsed.path.removeprefix("/api/qa/session/"))
             elif parsed.path == "/api/qa/sessions":
@@ -914,6 +1327,9 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     "available": hasattr(service, "trake_plan"),
                     "group": "L21",
                     "vlm_enabled": bool(runtime and runtime.vlm.enabled),
+                    "hybrid_retrieval_enabled": getattr(service, "hybrid_engine", None) is not None,
+                    "hybrid_retrievers": sorted(getattr(getattr(service, "hybrid_engine", None), "factories", {})),
+                    "gemini_configured": bool(getattr(getattr(service, "translator", None), "is_configured", False)),
                     "algorithm": getattr(runtime, "algorithm", None),
                     "config_fingerprint": getattr(runtime, "fingerprint", None),
                 })
@@ -931,7 +1347,51 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
         def do_POST(self) -> None:
             try:
                 payload = self._request_json()
-                if self.path == "/api/qa/prepare":
+                if self.path == "/api/submission/session/start":
+                    result = service.submission_start()
+                elif self.path == "/api/submission/agent/run":
+                    result = service.submission_agent_run(
+                        str(payload.get("session_id") or ""),
+                        str(payload.get("query_id") or ""),
+                        str(payload.get("task") or ""),
+                        str(payload.get("query") or ""),
+                        use_hybrid=bool(payload.get("use_hybrid", True)),
+                        use_gemini=bool(payload.get("use_gemini", True)),
+                    )
+                elif self.path in {"/api/submission/query/confirm", "/api/submission/query/update"}:
+                    result = service.submission_confirm(
+                        str(payload.get("session_id") or ""),
+                        str(payload.get("query_id") or ""),
+                        str(payload.get("task") or ""),
+                        list(payload.get("predictions") or []),
+                        event_count=int(payload["event_count"]) if payload.get("event_count") is not None else None,
+                        source=dict(payload.get("source") or {}),
+                    )
+                elif self.path == "/api/submission/query/remove":
+                    result = service.submission_remove(str(payload.get("session_id") or ""), str(payload.get("query_id") or ""))
+                elif self.path == "/api/submission/import/qa":
+                    if payload.get("official_frame_id") is None:
+                        raise ValueError("official_frame_id is required")
+                    result = service.submission_import_qa(
+                        str(payload.get("session_id") or ""),
+                        str(payload.get("qa_session_id") or ""),
+                        str(payload.get("review_id") or ""),
+                        parse_official_frame_id(payload.get("official_frame_id")),
+                        str(payload.get("mapping_source") or ""),
+                    )
+                elif self.path == "/api/submission/import/trake":
+                    result = service.submission_import_trake(
+                        str(payload.get("session_id") or ""),
+                        str(payload.get("trake_session_id") or ""),
+                        str(payload.get("review_id") or ""),
+                        [parse_official_frame_id(value) for value in payload.get("official_frame_ids") or []],
+                        str(payload.get("mapping_source") or ""),
+                    )
+                elif self.path == "/api/submission/session/validate":
+                    result = service.submission_validate(str(payload.get("session_id") or ""))
+                elif self.path == "/api/submission/session/done":
+                    result = service.submission_done(str(payload.get("session_id") or ""))
+                elif self.path == "/api/qa/prepare":
                     result = service.qa_prepare(
                         str(payload.get("query_id") or f"qa-{int(time.time() * 1000)}"),
                         str(payload.get("event_query") or ""),
@@ -939,6 +1399,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         str(payload["selected_video_id"]) if payload.get("selected_video_id") else None,
                         int(payload["selected_frame_id"]) if payload.get("selected_frame_id") is not None else None,
                         str(payload.get("retrieval_query") or "") or None,
+                        bool(payload.get("use_hybrid_retrieval", False)),
+                        bool(payload.get("use_gemini_planner", True)),
                     )
                 elif self.path == "/api/qa/draft-answer":
                     result = service.qa_draft_answer(
@@ -1090,6 +1552,31 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
             self._json(payload)
 
+        def _handle_agent_plan(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                payload = service.agent_query_plan(
+                    first(params, "q"),
+                    use_gemini=parse_bool(first(params, "use_gemini", "true")),
+                )
+            except Exception as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
+            self._json(payload)
+
+        def _handle_agent_search(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                payload = service.agent_search(
+                    first(params, "query_id"),
+                    first(params, "q"),
+                    top_k=parse_int(first(params, "top_k", str(DEFAULT_TOP_K_VIDEOS)), DEFAULT_TOP_K_VIDEOS),
+                    use_gemini=parse_bool(first(params, "use_gemini", "true")),
+                    strict=parse_bool(first(params, "strict", "false")),
+                )
+            except Exception as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
+            self._json(payload)
+
         def _handle_qa_session(self, session_id: str) -> None:
             try:
                 payload = service.qa_session(session_id)
@@ -1197,6 +1684,42 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             body = path.read_bytes()
             self.send_response(HTTPStatus.OK); self.send_header("Content-Type", content_type); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
 
+        def _serve_submission_static(self, relative_path: str) -> None:
+            static_dir = config.submission_static_dir or (config.repo_root / "web" / "submission_ui")
+            path = (static_dir / relative_path).resolve()
+            try:
+                path.relative_to(static_dir.resolve())
+            except ValueError:
+                self._error(HTTPStatus.FORBIDDEN, "submission static path is outside static dir")
+                return
+            if not path.is_file():
+                self._error(HTTPStatus.NOT_FOUND, "submission static file not found")
+                return
+            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            body = path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _serve_submission_zip(self, session_id: str) -> None:
+            try:
+                path = service.submission_zip_path(session_id)
+            except KeyError as exc:
+                self._error(HTTPStatus.NOT_FOUND, str(exc))
+                return
+            except (ValueError, FileNotFoundError) as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            body = path.read_bytes()
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition", 'attachment; filename="submission.zip"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def _serve_binary_file(self, path: Path, supports_range: bool = False) -> None:
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             file_size = path.stat().st_size
@@ -1292,6 +1815,18 @@ def parse_int(value: str, default: int) -> int:
         return int(value)
     except ValueError:
         return default
+
+
+def parse_official_frame_id(value: Any) -> int:
+    if value is None or isinstance(value, bool):
+        raise ValueError("official frame_id must be a non-negative integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("official frame_id must be a non-negative integer") from exc
+    if parsed < 0 or (isinstance(value, float) and not value.is_integer()):
+        raise ValueError("official frame_id must be a non-negative integer")
+    return parsed
 
 
 def parse_float(value: str, default: float) -> float:

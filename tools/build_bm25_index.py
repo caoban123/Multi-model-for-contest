@@ -1,0 +1,33 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from aic_retrieval.bm25_retriever import build_bm25_index
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Build a SQLite FTS5/BM25 index over the canonical L21 text corpus.")
+    parser.add_argument("--corpus", type=Path, default=ROOT / "artifacts" / "corpora" / "l21_text" / "documents.jsonl")
+    parser.add_argument("--corpus-manifest", type=Path, default=ROOT / "artifacts" / "corpora" / "l21_text" / "manifest.json")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_bm25")
+    args = parser.parse_args()
+    manifest = build_bm25_index(
+        root=ROOT,
+        corpus_path=args.corpus,
+        corpus_manifest_path=args.corpus_manifest,
+        output_dir=args.output_dir,
+    )
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,604 @@
+{
+  "version": "hybrid-reviewed-clip-pool-v1",
+  "status": "PARTIAL_JUDGMENTS_NOT_PROMOTION_GROUND_TRUTH",
+  "description": "Video positives derived from manual review of CLIP-pooled UI exports. Unseen videos are unjudged, not negative.",
+  "source_fingerprint": "590ae960c9bfed68425a47e128bcd566e0e3f5ff5f3df04820bbecfe34b15e45",
+  "query_count": 23,
+  "queries": [
+    {
+      "query_id": "reviewed-001",
+      "query_text": "a computer monitor or television screen",
+      "expected_video_ids": [
+        "L21_V006",
+        "L21_V009",
+        "L21_V010",
+        "L21_V011",
+        "L21_V018",
+        "L21_V022",
+        "L21_V024",
+        "L21_V026",
+        "L21_V028"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-17-37-767Z.csv",
+          "aic_retrieval_review_2026-08-16T16-21-19-427Z.csv"
+        ],
+        "reviewed_rows": 24,
+        "positive_video_count": 9,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-002",
+      "query_text": "a crowd of people at an event",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V003",
+        "L21_V005",
+        "L21_V006",
+        "L21_V010",
+        "L21_V014",
+        "L21_V023",
+        "L21_V024",
+        "L21_V025"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-12-31-555Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 9,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-003",
+      "query_text": "a hand holding a small object",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V008",
+        "L21_V025",
+        "L21_V030"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-41-50-324Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 4,
+        "negative_video_ids": [
+          "L21_V005",
+          "L21_V014",
+          "L21_V015",
+          "L21_V022",
+          "L21_V026",
+          "L21_V031"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-004",
+      "query_text": "a mobile phone",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V002",
+        "L21_V006",
+        "L21_V008",
+        "L21_V010",
+        "L21_V011",
+        "L21_V012",
+        "L21_V013",
+        "L21_V024",
+        "L21_V026"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-20-00-611Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 10,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-005",
+      "query_text": "a motorbike on the street",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V013",
+        "L21_V023",
+        "L21_V025",
+        "L21_V026",
+        "L21_V030"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-22-18-561Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 6,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-006",
+      "query_text": "a person holding a phone",
+      "expected_video_ids": [
+        "L21_V002",
+        "L21_V006",
+        "L21_V014",
+        "L21_V017",
+        "L21_V025",
+        "L21_V026",
+        "L21_V031"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-39-59-794Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 7,
+        "negative_video_ids": [
+          "L21_V008",
+          "L21_V011",
+          "L21_V016"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-007",
+      "query_text": "a person on the left side of the frame",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V002",
+        "L21_V011",
+        "L21_V016",
+        "L21_V018",
+        "L21_V026",
+        "L21_V029",
+        "L21_V031"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-27-35-509Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 8,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-008",
+      "query_text": "a person riding a motorbike",
+      "expected_video_ids": [
+        "L21_V002",
+        "L21_V003",
+        "L21_V010",
+        "L21_V018",
+        "L21_V021",
+        "L21_V022",
+        "L21_V025",
+        "L21_V030"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-40-51-139Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 8,
+        "negative_video_ids": [
+          "L21_V008"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-009",
+      "query_text": "a person walking outdoors",
+      "expected_video_ids": [
+        "L21_V002",
+        "L21_V007",
+        "L21_V011",
+        "L21_V018",
+        "L21_V023",
+        "L21_V025",
+        "L21_V031"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-11-14-172Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 7,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-010",
+      "query_text": "a person wearing a blue shirt",
+      "expected_video_ids": [
+        "L21_V011",
+        "L21_V013",
+        "L21_V023",
+        "L21_V027",
+        "L21_V028",
+        "L21_V029",
+        "L21_V031"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-59-27-792Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 7,
+        "negative_video_ids": [
+          "L21_V001"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-011",
+      "query_text": "a person wearing a green shirt",
+      "expected_video_ids": [
+        "L21_V009",
+        "L21_V014",
+        "L21_V015",
+        "L21_V016",
+        "L21_V018",
+        "L21_V031"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T17-04-40-447Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 6,
+        "negative_video_ids": [
+          "L21_V006",
+          "L21_V026",
+          "L21_V028"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-012",
+      "query_text": "a person wearing a pink shirt",
+      "expected_video_ids": [
+        "L21_V018",
+        "L21_V021",
+        "L21_V024",
+        "L21_V025"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T17-01-19-898Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 4,
+        "negative_video_ids": [
+          "L21_V009",
+          "L21_V028"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-013",
+      "query_text": "a person wearing a red shirt",
+      "expected_video_ids": [
+        "L21_V011"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-55-45-017Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 1,
+        "negative_video_ids": [
+          "L21_V001",
+          "L21_V009",
+          "L21_V019"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-014",
+      "query_text": "a person wearing a white shirt",
+      "expected_video_ids": [
+        "L21_V002",
+        "L21_V013",
+        "L21_V015",
+        "L21_V022",
+        "L21_V024",
+        "L21_V028"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-56-33-110Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 6,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-015",
+      "query_text": "a person wearing a yellow shirt",
+      "expected_video_ids": [
+        "L21_V002",
+        "L21_V010",
+        "L21_V012",
+        "L21_V015"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T17-00-21-513Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 4,
+        "negative_video_ids": [
+          "L21_V006",
+          "L21_V027",
+          "L21_V030"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-016",
+      "query_text": "a person wearing black clothes",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V002",
+        "L21_V011",
+        "L21_V015",
+        "L21_V021",
+        "L21_V022",
+        "L21_V023",
+        "L21_V029",
+        "L21_V030"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-57-12-920Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 9,
+        "negative_video_ids": [
+          "L21_V024"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-017",
+      "query_text": "a red vehicle",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V002",
+        "L21_V008",
+        "L21_V022",
+        "L21_V024",
+        "L21_V030"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T17-02-06-227Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 6,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-018",
+      "query_text": "a vehicle in the center of the frame",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V006",
+        "L21_V008",
+        "L21_V010",
+        "L21_V011",
+        "L21_V013",
+        "L21_V019",
+        "L21_V029"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-37-06-155Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 8,
+        "negative_video_ids": [
+          "L21_V015"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-019",
+      "query_text": "a white vehicle",
+      "expected_video_ids": [
+        "L21_V008",
+        "L21_V011",
+        "L21_V022",
+        "L21_V024",
+        "L21_V025",
+        "L21_V029"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-58-23-621Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 6,
+        "negative_video_ids": [
+          "L21_V010",
+          "L21_V028"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-020",
+      "query_text": "at least three vehicles",
+      "expected_video_ids": [
+        "L21_V002",
+        "L21_V005",
+        "L21_V006",
+        "L21_V017",
+        "L21_V022"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-26-19-644Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 5,
+        "negative_video_ids": [
+          "L21_V003",
+          "L21_V013",
+          "L21_V028"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-021",
+      "query_text": "people sitting indoors",
+      "expected_video_ids": [
+        "L21_V005",
+        "L21_V009",
+        "L21_V025",
+        "L21_V026"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-13-56-087Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 4,
+        "negative_video_ids": [
+          "L21_V008",
+          "L21_V011",
+          "L21_V014",
+          "L21_V027"
+        ]
+      }
+    },
+    {
+      "query_id": "reviewed-022",
+      "query_text": "title \"60 Giây Sáng\" on screen",
+      "expected_video_ids": [
+        "L21_V003",
+        "L21_V006",
+        "L21_V007",
+        "L21_V010",
+        "L21_V011",
+        "L21_V013",
+        "L21_V015",
+        "L21_V016",
+        "L21_V018",
+        "L21_V024",
+        "L21_V025",
+        "L21_V031"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-43-58-745Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 12,
+        "negative_video_ids": []
+      }
+    },
+    {
+      "query_id": "reviewed-023",
+      "query_text": "title contains latest news",
+      "expected_video_ids": [
+        "L21_V001",
+        "L21_V002",
+        "L21_V003",
+        "L21_V009",
+        "L21_V010",
+        "L21_V011",
+        "L21_V014",
+        "L21_V016",
+        "L21_V018",
+        "L21_V019",
+        "L21_V024"
+      ],
+      "source_types": [],
+      "category": "reviewed_visual_pool",
+      "language": "en",
+      "review": {
+        "csv_files": [
+          "aic_retrieval_review_2026-08-16T16-45-02-726Z.csv"
+        ],
+        "reviewed_rows": 12,
+        "positive_video_count": 11,
+        "negative_video_ids": []
+      }
+    }
+  ]
+}

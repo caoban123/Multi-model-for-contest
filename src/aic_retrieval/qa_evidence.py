@@ -149,6 +149,61 @@ def _frame_evidence(
     refs.extend(_modality_matches(EvidenceModality.ATTRIBUTE, evidence.get("attribute", []), video_id, keyframe_id, frame_idx, timestamp, "attribute_service", _version(response, "attribute_version"), availability, counts, limit))
     refs.extend(_modality_matches(EvidenceModality.OCR, evidence.get("ocr", []), video_id, keyframe_id, frame_idx, timestamp, "phase5_store", _version(response, "phase5_store_version"), availability, counts, limit))
     refs.extend(_modality_matches(EvidenceModality.ASR, evidence.get("asr", []), video_id, keyframe_id, frame_idx, timestamp, "phase5_store", _version(response, "phase5_store_version"), availability, counts, limit))
+    refs.extend(_hybrid_retriever_evidence(frame, video_id, keyframe_id, frame_idx, timestamp, availability, counts, limit))
+    return refs
+
+
+def _hybrid_retriever_evidence(
+    frame: Mapping[str, Any],
+    video_id: str,
+    keyframe_id: int | None,
+    frame_idx: int | None,
+    timestamp: float | None,
+    availability: dict[EvidenceModality, AvailabilityStatus],
+    counts: dict[EvidenceModality, int],
+    limit: int,
+) -> list[EvidenceRef]:
+    provenance = frame.get("provenance")
+    channel_evidence = provenance.get("evidence") if isinstance(provenance, Mapping) else None
+    if not isinstance(channel_evidence, Mapping):
+        return []
+    modality_by_source = {
+        "clip": EvidenceModality.CLIP,
+        "asr": EvidenceModality.ASR,
+        "ocr": EvidenceModality.OCR,
+        "object": EvidenceModality.OBJECT,
+        "metadata": EvidenceModality.METADATA,
+    }
+    refs: list[EvidenceRef] = []
+    for retriever_name, value in channel_evidence.items():
+        if not isinstance(value, Mapping):
+            continue
+        source_type = str(value.get("source_type", ""))
+        modality = modality_by_source.get(source_type)
+        if modality is None or counts[modality] >= limit:
+            continue
+        payload = {
+            "retriever": str(retriever_name),
+            "rank": value.get("rank"),
+            "score": value.get("raw_score"),
+            "matched_text": value.get("matched_text"),
+            "document_id": value.get("document_id"),
+            "provenance": value.get("provenance", {}),
+        }
+        refs.append(
+            _ref(
+                modality,
+                video_id,
+                _optional_int(value.get("keyframe_id")) if value.get("keyframe_id") is not None else keyframe_id,
+                _optional_int(value.get("frame_idx")) if value.get("frame_idx") is not None else frame_idx,
+                _optional_float(value.get("pts_time")) if value.get("pts_time") is not None else timestamp,
+                payload,
+                f"hybrid_{retriever_name}",
+                str(provenance.get("fusion_version") or "generic-video-rrf-v1"),
+            )
+        )
+        counts[modality] += 1
+        availability[modality] = AvailabilityStatus.AVAILABLE
     return refs
 
 
@@ -199,6 +254,7 @@ def _retrieval_context(response: Mapping[str, Any]) -> dict[str, Any]:
         "structured_query", "query_plan", "reranker", "fusion_config", "aggregation_method",
         "index_schema_version", "index_fingerprint", "phase5_store_version", "phase6_config_version",
         "qa_event_query", "qa_retrieval_query",
+        "qa_hybrid_retrieval", "profile", "health", "failures", "channel_hit_counts", "latency_ms",
     )
     return {key: response[key] for key in keys if key in response}
 

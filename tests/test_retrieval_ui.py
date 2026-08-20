@@ -4,10 +4,15 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from aic_retrieval.hybrid_query_planner import HybridQueryPlan, HybridQueryPlanner
 from aic_retrieval.metadata_search import load_metadata_documents
+from aic_retrieval.retrievers import RetrievalHit
 from aic_retrieval.retrieval_ui import RetrievalUiConfig, RetrievalUiService, parse_int
 from aic_retrieval.search import FrameRef, SearchResult, aggregate_results_by_video
 from aic_retrieval.qa_workflow import QaWorkflow
+from aic_retrieval.trake_config import TrakeRuntimeConfig
+from aic_retrieval.trake_schema import TrakeEvent, TrakeRequest
+from aic_retrieval.translation import TranslationConfig
 
 
 def make_service(tmp_path: Path) -> RetrievalUiService:
@@ -166,6 +171,163 @@ def test_qa_prepare_uses_retrieval_query_but_keeps_original_event_query(tmp_path
     assert seen_queries == ["a person wearing a red shirt"]
     assert payload["session"]["request"]["event_query"] == "người mặc áo đỏ"
     assert payload["evidence_pack"]["retrieval_context"]["qa_retrieval_query"] == "a person wearing a red shirt"
+
+
+def test_qa_prepare_can_use_opt_in_agent_hybrid_retrieval(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    seen: list[tuple[str, str, int, bool]] = []
+
+    def fake_agent_search(query_id: str, query: str, *, top_k: int, use_gemini: bool, strict: bool = False):
+        seen.append((query_id, query, top_k, use_gemini))
+        return {
+            "mode": "agent_hybrid",
+            "profile": "clip_bm25",
+            "query_plan": {"visual_clip_query_en": "a person wearing a red shirt"},
+            "video_results": [{"video_id": "L21_V001", "rank": 1, "keyframe_id": 1}],
+        }
+
+    service.agent_search = fake_agent_search
+    service.qa_workflow = QaWorkflow()
+    service.index_metadata = {}
+    service.reranker_config = type("Config", (), {})()
+    service.phase5_service = None
+    service.refs = []
+    service.index = np.zeros((1, 2))
+    service.object_service = None
+    service.metadata_docs = []
+    service.attribute_service = type("Attributes", (), {"available": False})()
+
+    payload = service.qa_prepare(
+        "q-agent",
+        "nguoi mac ao do",
+        "nguoi do dang lam gi?",
+        use_hybrid_retrieval=True,
+        use_gemini_planner=False,
+    )
+
+    assert seen == [("q-agent", "nguoi mac ao do", 12, False)]
+    context = payload["evidence_pack"]["retrieval_context"]
+    assert context["qa_hybrid_retrieval"] is True
+    assert context["qa_retrieval_query"] == "a person wearing a red shirt"
+    assert payload["session"]["request"]["event_query"] == "nguoi mac ao do"
+
+
+def test_agent_search_returns_workspace_trace_without_changing_result_contract(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    service.hybrid_query_planner = HybridQueryPlanner(TranslationConfig(provider="gemini"))
+
+    class Engine:
+        def search(self, query_id, plan, **_kwargs):
+            return {
+                "schema_version": "hybrid-retrieval-response-v1",
+                "query_id": query_id,
+                "query_plan": plan.to_dict(),
+                "profile": plan.profile,
+                "fusion_method": "single_channel_rank",
+                "health": {},
+                "failures": {},
+                "channel_hit_counts": {"clip": 1},
+                "latency_ms": {"clip": 1.0, "total": 1.2},
+                "results": [{
+                    "retriever": "rrf",
+                    "rank": 1,
+                    "raw_score": 0.1,
+                    "video_id": "L21_V001",
+                    "source_type": "hybrid",
+                    "document_id": "clip:L21_V001:1",
+                    "keyframe_id": 1,
+                    "frame_idx": 0,
+                    "pts_time": 0.0,
+                    "matched_text": None,
+                    "provenance": {"retriever_ranks": {"clip": 1}},
+                }],
+            }
+
+    service.hybrid_engine = Engine()
+
+    payload = service.agent_search("query-1-kis", "a person walking outdoors", use_gemini=True)
+
+    assert payload["agent_workspace_version"] == "agent-workspace-v2"
+    assert payload["agent_trace"]["status"] == "UNAVAILABLE"
+    assert payload["agent_trace"]["validated_plan"] == payload["query_plan"]
+    assert payload["results"][0]["video_id"] == "L21_V001"
+
+
+def test_build_hybrid_engine_returns_configured_lazy_retriever_factories(tmp_path: Path) -> None:
+    bge_dir = tmp_path / "bge"
+    bm25_dir = tmp_path / "bm25"
+    bge_dir.mkdir()
+    bm25_dir.mkdir()
+    (bge_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    (bm25_dir / "manifest.json").write_text("{}", encoding="utf-8")
+    service = RetrievalUiService.__new__(RetrievalUiService)
+    service.config = RetrievalUiConfig(
+        repo_root=tmp_path,
+        registry_path=tmp_path / "registry.json",
+        index_dir=tmp_path / "clip",
+        metadata_dir=tmp_path / "metadata",
+        static_dir=tmp_path / "web",
+        groups={"L21"},
+        hybrid_enabled=True,
+        bge_index_dir=bge_dir,
+        bm25_index_dir=bm25_dir,
+        bge_model_path=tmp_path / "model",
+    )
+    service._encoder = lambda: object()
+
+    engine = service._build_hybrid_engine()
+
+    assert set(engine.factories) == {"clip", "bge", "bm25"}
+
+
+def test_trake_request_can_opt_in_to_frame_level_hybrid_channels(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+
+    class Planner:
+        def plan(self, query: str, *, use_gemini: bool):
+            assert query == "noi ve mua lon"
+            assert use_gemini is False
+            return HybridQueryPlan(
+                original_query=query,
+                visual_clip_query_en="a report about heavy rain",
+                semantic_text_query=query,
+                lexical_text_query="mua lon",
+                intent="lexical_text",
+                enabled_retrievers=("bm25",),
+                profile="bm25",
+                fusion_method="single_channel",
+                reasons=("ASR phrase",),
+                source_filters={"bm25": ("asr",)},
+            )
+
+    class Engine:
+        def search_channel(self, name, request):
+            assert name == "bm25"
+            assert request.query_text == "mua lon"
+            return [RetrievalHit("bm25", 1, 4.2, "L21_V001", "asr", "asr:1", 2, 30, 1.0, "mua lon")]
+
+    service.hybrid_query_planner = Planner()
+    service.hybrid_engine = Engine()
+    service.trake_runtime_config = TrakeRuntimeConfig.legacy()
+    service.structured_generator = type("Generator", (), {"ref_by_key": {
+        (ref.video_id, ref.keyframe_id): ref for ref in service.refs_by_video["L21_V001"]
+    }})()
+    service.phase5_service = None
+    service.object_service = None
+    service.attribute_service = type("Attributes", (), {"available": False})()
+    request = TrakeRequest(
+        "q-trake",
+        "noi ve mua lon",
+        (TrakeEvent("e1", 1, "noi ve mua lon", "noi ve mua lon"),),
+        constraints={"hybrid_retrieval": True, "hybrid_use_gemini": False},
+    )
+
+    results = service._trake_retrieve_request(request, 10)
+
+    assert results["e1"][0]["retrieval_method"] == "rank_fusion_hybrid_event_v1"
+    assert results["e1"][0]["provenance"] == ["bm25"]
+    assert results.query_plans["e1"]["profile"] == "bm25"
+    assert results.hybrid_failures == {}
 
 
 def test_service_metadata_search_returns_video_results(tmp_path: Path) -> None:

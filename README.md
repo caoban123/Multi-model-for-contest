@@ -1,15 +1,15 @@
 # Multi-model for AIC Video Retrieval
 
-## Current Snapshot - 2026-08-19
+## Current Snapshot - 2026-08-20
 
 > Read this section first. Older sections below are retained as historical phase notes and may describe earlier limitations.
 
-The repository now contains a working L21-focused video retrieval system with UI, hybrid/structured retrieval, Phase 5 ASR/OCR storage, Phase 6 reranking/planning, Phase 7 Q&A, a local Phase 8 TRAKE implementation, optional Gemini Q&A drafting, and Phase 9 internal submission hardening. TRAKE's optional P8.7 VLM extension remains disabled.
+The repository now contains a working L21-focused video retrieval system with CLIP, opt-in BGE/FAISS and BM25 retrieval, Agent routing, evidence-grounded Q&A, TRAKE temporal alignment, and a guarded official submission workspace for KIS/Q&A/TRAKE. CLIP remains the default because the current partial benchmark does not justify promoting always-on Hybrid Retrieval.
 
 Latest comprehensive report:
 
 ```text
-reports/Project_Status_19-08-2026_1.md
+reports/Phase_9_20-08-2026_12.md
 ```
 
 High-level status:
@@ -18,8 +18,8 @@ High-level status:
 |---|---|---|
 | Data registry | Implemented | `artifacts/registry/data_registry.json` describes local assets. |
 | CLIP NumPy index | Implemented | L21 index is expected at `artifacts/indexes/l21_numpy`. |
-| Retrieval UI | Implemented | Visual search, metadata search, pins, history, raw video preview, keyframe neighborhood viewer. |
-| Auto query rewrite | Implemented | Visual search and Q&A event query use Gemini to create English CLIP-ready queries. |
+| Retrieval UI | Implemented | Visual search, metadata search, Agent workspace, pins, history, raw video preview, keyframe neighborhood viewer. |
+| Agent query routing | Implemented, opt-in | Separate CLIP-English, BGE semantic and BM25 lexical queries with raw/parsed/validated Gemini trace and local fallback. |
 | Structured retrieval | Implemented, opt-in | CLIP + objects + metadata + attributes + OCR/ASR via `/api/structured-search`. |
 | Object store | Built for L21 | `artifacts/structured/l21_objects.sqlite`, 7,800 frames, 780,000 detections. Raw labels live in `detection_class_entities`. |
 | Attribute/color evidence | Implemented | Useful for constraints such as red shirt or white car. |
@@ -28,14 +28,17 @@ High-level status:
 | Phase 7 Q&A | Implemented | Evidence-first Q&A, manual review, SQLite session store, export record flow. |
 | Gemini Q&A/VLM | Implemented as option | `Draft with Gemini` sends selected evidence plus related keyframe images to Gemini. |
 | Phase 8 TRAKE | Implementation complete; quality pending | Local plan/retrieve/temporal-align, `/trake` workspace, SQLite review, internal export and selected-event refinement exist; manual development/holdout labels are pending. |
-| Phase 9 submission hardening | Started | Internal schema, validator, QA export adapter, runbook are implemented. |
-| FAISS/vector DB | Not implemented | Current retrieval uses NumPy index; FAISS/vector DB remain future optimization. |
+| Phase 9 submission workflow | Implemented, guarded | `/submission` has rich Agent candidate cards, Gemini trace, SQLite queue, official KIS/Q&A/TRAKE CSV, validation and `submission.zip`. Official frame IDs require manual/BTC-certified mapping. |
+| FAISS/vector DB | Implemented, opt-in | BGE-M3 FAISS index covers 8,322 L21 text documents; it does not replace the CLIP NumPy baseline. |
+| BM25 | Implemented, opt-in | SQLite FTS5 index covers the same 8,322-document L21 corpus. |
 
 Current important local artifacts:
 
 ```text
 artifacts/registry/data_registry.json
 artifacts/indexes/l21_numpy/
+artifacts/indexes/l21_bge/
+artifacts/indexes/l21_bm25/
 artifacts/structured/l21_objects.sqlite
 artifacts/structured/l21_objects_manifest.json
 artifacts/phase5/ocr_l21.jsonl
@@ -50,6 +53,7 @@ Run the UI:
 
 ```powershell
 $env:AIC_CLIP_MODEL_ID="D:\AIC\.cache\huggingface\hub\models--openai--clip-vit-base-patch32\snapshots\3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
+$env:AIC_BGE_MODEL_PATH="D:\AIC\.cache\huggingface\hub\models--BAAI--bge-m3\snapshots\5617a9f61b028005a4858fdac845db406aefb181"
 $env:AIC_TRANSLATION_API_KEY="<your-gemini-api-key>"
 $env:AIC_TRANSLATION_PROVIDER="gemini"
 $env:AIC_TRANSLATION_MODEL="gemini-3.5-flash"
@@ -59,6 +63,10 @@ python tools\retrieval_ui.py `
   --index-dir artifacts\indexes\l21_numpy `
   --groups L21 `
   --clip-local-files-only `
+  --enable-hybrid-retrieval `
+  --bge-index-dir artifacts\indexes\l21_bge `
+  --bge-model-path $env:AIC_BGE_MODEL_PATH `
+  --bm25-index-dir artifacts\indexes\l21_bm25 `
   --phase5-store artifacts\phase5\phase5_store.sqlite `
   --qa-store artifacts\qa\phase7_qa.sqlite3
 ```
@@ -67,23 +75,26 @@ Open:
 
 ```text
 http://127.0.0.1:8765
+http://127.0.0.1:8765/trake
+http://127.0.0.1:8765/submission
 ```
 
 Current test status:
 
 ```text
 python -m pytest -q
-188 passed
+340 passed
 ```
 
 Known limitations:
 
 - OCR is not yet useful on current L21 artifact because all OCR detections are empty.
-- Q&A candidate retrieval does not yet use structured retrieval by default; it currently uses the Gemini-optimized CLIP event query.
+- Hybrid Retrieval remains opt-in; CLIP remains the verified default visual baseline.
 - Gemini VLM answer drafting requires Internet and a configured Gemini API key.
-- Confirmed Q&A submission export currently produces no candidates until the user confirms/exports Q&A records in the UI.
+- Gemini structured-filter output is a reviewed suggestion: use `Use in Structured Search` to load it, then review and run Visual Structured Search. It is not silently applied to the Agent result ranking.
+- OCR currently has zero usable documents and ASR covers only 2/29 L21 videos.
 - Phase 8 TRAKE core is implemented for L21; quality/holdout verification is pending manual labels. See `docs/PHASE8_TESTING.md`.
-- Official contest submission adapter is pending the organizer's final format.
+- Automatic official `frame_id` mapping is intentionally blocked. The submission UI requires a manually verified official frame ID or a future BTC-certified mapping.
 
 Repository này dùng để xây hệ thống truy xuất video cho AIC 2026. Dự án đang ở giai đoạn đầu: ưu tiên kiểm kê dữ liệu, xác minh mapping, dựng registry và baseline retrieval trước khi làm UI, Q&A, TRAKE hoặc agent.
 
@@ -578,3 +589,25 @@ Default outputs are written under `artifacts\submissions\`:
 - `qa_submission_validation.json`
 
 See [`docs/PHASE9_SUBMISSION_HARDENING.md`](docs/PHASE9_SUBMISSION_HARDENING.md) for schema, validation rules, and the offline checklist.
+
+## Phase 9 Current - Hybrid Retrieval and Submission Agent
+
+Phase 9 adds modular BGE-M3/FAISS and BM25 retrievers without replacing CLIP. The Agent chooses a visible opt-in route per query and falls back to deterministic local planning when Gemini is unavailable. Visual/KIS and Q&A use video-level RRF; TRAKE keeps frame-level event fusion so temporal alignment still receives moments rather than video-only hits.
+
+The separate `/submission` workspace stores an ACTIVE session and confirmed query queue in SQLite. KIS can run Agent retrieval directly. Q&A and TRAKE import only reviewed workflow outputs. All three tasks require a manually verified official frame ID until a BTC mapping is certified.
+
+Official output rules enforced by code:
+
+- KIS: `video_id,frame_id`.
+- Q&A: `video_id,frame_id,answer`, answer at most 100 characters.
+- TRAKE: `video_id,frame_event_1,...,frame_event_N` with exactly N frames.
+- One CSV per query, no header, UTF-8, at most 100 rows.
+- ZIP entries are always under `submission/`.
+- Score, rank, provenance, keyframe ID and timestamp cannot enter the official writer.
+
+Use `/submission` to Start, retrieve/import, review nearby frames, enter verified official frame IDs, Confirm, Validate, Done and download `submission.zip`. Session files are written under `artifacts/submissions/` and are not committed.
+
+Latest implementation plan and report:
+
+- [`plan/11_PHASE_9_SUBMISSION_AGENT_UI_REPLAN.md`](plan/11_PHASE_9_SUBMISSION_AGENT_UI_REPLAN.md)
+- [`reports/Phase_9_20-08-2026_9.md`](reports/Phase_9_20-08-2026_9.md)

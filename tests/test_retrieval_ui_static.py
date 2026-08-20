@@ -76,6 +76,32 @@ def test_retrieval_ui_has_metadata_mode() -> None:
     assert "normalizeResult" in script
 
 
+def test_retrieval_ui_has_opt_in_agent_hybrid_mode_and_trace() -> None:
+    html = (ROOT / "web" / "retrieval_ui" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "web" / "retrieval_ui" / "styles.css").read_text(encoding="utf-8")
+
+    for control_id in (
+        "agent-mode-button", "agent-query-id", "agent-plan-panel", "agent-use-gemini",
+        "agent-plan-profile", "agent-clip-query", "agent-semantic-query", "agent-lexical-query",
+        "agent-plan-trace", "agent-run-state", "agent-execution-strip", "agent-summary-tab",
+        "agent-gemini-tab", "agent-system-tab", "agent-gemini-raw", "agent-gemini-parsed",
+        "agent-validated-plan", "agent-structured-suggestions", "agent-apply-structured",
+    ):
+        assert f'id="{control_id}"' in html
+    assert "/api/agent-search" in script
+    assert "renderAgentPlan" in script
+    assert "source_filters" in script
+    assert "retriever_ranks" in script
+    assert "agent_trace" in script
+    assert "structured_filter_suggestions" in script
+    assert "applyAgentStructuredSuggestions" in script
+    assert ".agent-query-grid" in styles
+    assert ".agent-execution-strip" in styles
+    assert ".agent-code-output" in styles
+    assert ".agent-plan-panel[hidden]" in styles
+
+
 def test_retrieval_ui_auto_translates_visual_query_for_clip() -> None:
     html = (ROOT / "web" / "retrieval_ui" / "index.html").read_text(encoding="utf-8")
     script = (ROOT / "web" / "retrieval_ui" / "app.js").read_text(encoding="utf-8")

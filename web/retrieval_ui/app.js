@@ -8,6 +8,7 @@ const exportButton = document.querySelector("#export-button");
 const exportPinsButton = document.querySelector("#export-pins-button");
 const clearHistoryButton = document.querySelector("#clear-history-button");
 const visualModeButton = document.querySelector("#visual-mode-button");
+const agentModeButton = document.querySelector("#agent-mode-button");
 const metadataModeButton = document.querySelector("#metadata-mode-button");
 const videoRankingButton = document.querySelector("#video-ranking-button");
 const frameRankingButton = document.querySelector("#frame-ranking-button");
@@ -61,9 +62,11 @@ const videoDialogTitle = document.querySelector("#video-dialog-title");
 const videoDialogMeta = document.querySelector("#video-dialog-meta");
 const closeVideoButton = document.querySelector("#close-video-button");
 const qaForm = document.querySelector("#qa-form");
+const qaQueryIdInput = document.querySelector("#qa-query-id");
 const qaEventQueryInput = document.querySelector("#qa-event-query");
 const qaClipEventQueryInput = document.querySelector("#qa-clip-event-query");
 const qaQuestionInput = document.querySelector("#qa-question");
+const qaUseAgentRetrievalInput = document.querySelector("#qa-use-agent-retrieval");
 const qaPrepareButton = document.querySelector("#qa-prepare-button");
 const qaStatusEl = document.querySelector("#qa-status");
 const qaCandidatesEl = document.querySelector("#qa-candidates");
@@ -77,6 +80,31 @@ const qaConfirmButton = document.querySelector("#qa-confirm-button");
 const qaRejectButton = document.querySelector("#qa-reject-button");
 const qaExportButton = document.querySelector("#qa-export-button");
 const qaHistoryEl = document.querySelector("#qa-history");
+const agentQueryIdField = document.querySelector("#agent-query-id-field");
+const agentQueryIdInput = document.querySelector("#agent-query-id");
+const agentPlanPanel = document.querySelector("#agent-plan-panel");
+const agentUseGeminiInput = document.querySelector("#agent-use-gemini");
+const agentPlanProfile = document.querySelector("#agent-plan-profile");
+const agentClipQueryEl = document.querySelector("#agent-clip-query");
+const agentSemanticQueryEl = document.querySelector("#agent-semantic-query");
+const agentLexicalQueryEl = document.querySelector("#agent-lexical-query");
+const agentPlanTrace = document.querySelector("#agent-plan-trace");
+const agentRunStateEl = document.querySelector("#agent-run-state");
+const agentExecutionStrip = document.querySelector("#agent-execution-strip");
+const agentInspectorTabs = [...document.querySelectorAll(".agent-inspector-tab")];
+const agentInspectorPanels = [...document.querySelectorAll(".agent-inspector-panel")];
+const agentGeminiStatusEl = document.querySelector("#agent-gemini-status");
+const agentGeminiModelEl = document.querySelector("#agent-gemini-model");
+const agentGeminiLatencyEl = document.querySelector("#agent-gemini-latency");
+const agentGeminiMessageEl = document.querySelector("#agent-gemini-message");
+const agentGeminiRawEl = document.querySelector("#agent-gemini-raw");
+const agentGeminiParsedEl = document.querySelector("#agent-gemini-parsed");
+const agentValidatedPlanEl = document.querySelector("#agent-validated-plan");
+const agentNormalizationNotesEl = document.querySelector("#agent-normalization-notes");
+const agentChannelMetricsEl = document.querySelector("#agent-channel-metrics");
+const agentStructuredSuggestionsEl = document.querySelector("#agent-structured-suggestions");
+const agentStructuredSummaryEl = document.querySelector("#agent-structured-summary");
+const agentApplyStructuredButton = document.querySelector("#agent-apply-structured");
 let currentPayload = null;
 let reviewState = new Map();
 let activeMode = "visual";
@@ -85,9 +113,11 @@ let structuredSearchAvailable = false;
 let attributeSearchAvailable = false;
 let ocrSearchAvailable = false;
 let asrSearchAvailable = false;
+let hybridRetrievalEnabled = false;
 let qaPayload = null;
 let qaDraft = null;
 let qaReview = null;
+let agentStructuredSuggestions = null;
 const STORAGE_KEYS = {
   history: "aic_retrieval_history_v1",
   pins: "aic_retrieval_pins_v1",
@@ -158,8 +188,9 @@ function renderQaPayload(payload) {
   const pack = payload.evidence_pack || {};
   const request = payload.session?.request || pack.request || {};
   const retrievalContext = pack.retrieval_context || {};
+  if (request.query_id) qaQueryIdInput.value = request.query_id;
   if (request.event_query) qaEventQueryInput.value = request.event_query;
-  qaClipEventQueryInput.value = retrievalContext.qa_retrieval_query || retrievalContext.query || "";
+  qaClipEventQueryInput.value = retrievalContext.query_plan?.visual_clip_query_en || retrievalContext.qa_retrieval_query || retrievalContext.query || "";
   const candidates = pack.candidates || [];
   qaCandidatesEl.replaceChildren();
   for (const candidate of candidates) {
@@ -198,7 +229,10 @@ function renderQaPayload(payload) {
   }
   if (!(pack.evidence_refs || []).length) qaEvidenceEl.textContent = "No source-backed evidence was available.";
   const availability = Object.entries(pack.modality_availability || {}).map(([modality, state]) => `${modality}: ${state}`).join(" · ");
-  setQaStatus(`Route: ${payload.question_route?.question_type || "UNKNOWN"}. ${availability || "No modalities available."}`);
+  const retrievalProfile = retrievalContext.profile
+    ? ` Retrieval: ${retrievalContext.profile} / ${retrievalContext.query_plan?.planner_source || "local"}.`
+    : "";
+  setQaStatus(`Route: ${payload.question_route?.question_type || "UNKNOWN"}.${retrievalProfile} ${availability || "No modalities available."}`);
   qaDraft = null;
   qaReview = null;
   qaAnswerEl.textContent = "Select evidence, then create a proposal.";
@@ -273,15 +307,30 @@ function updateQaControls() {
 async function prepareQa() {
   qaPrepareButton.disabled = true;
   try {
+    const queryId = qaQueryIdInput.value.trim();
     const eventQuery = qaEventQueryInput.value.trim();
     const question = qaQuestionInput.value.trim();
-    if (!eventQuery || !question) {
+    if (!queryId || !eventQuery || !question) {
       return;
     }
-    setQaStatus("Optimizing event query for CLIP with Gemini...");
-    const retrievalQuery = await autoTranslateClipQuery(eventQuery);
-    qaClipEventQueryInput.value = retrievalQuery;
-    const payload = await postJson("/api/qa/prepare", { event_query: eventQuery, retrieval_query: retrievalQuery, question });
+    const useHybrid = qaUseAgentRetrievalInput.checked && hybridRetrievalEnabled;
+    let request;
+    if (useHybrid) {
+      setQaStatus("Agent is planning CLIP, BGE, and BM25 retrieval...");
+      request = {
+        query_id: queryId,
+        event_query: eventQuery,
+        question,
+        use_hybrid_retrieval: true,
+        use_gemini_planner: true,
+      };
+    } else {
+      setQaStatus("Optimizing event query for CLIP with Gemini...");
+      const retrievalQuery = await autoTranslateClipQuery(eventQuery);
+      qaClipEventQueryInput.value = retrievalQuery;
+      request = { query_id: queryId, event_query: eventQuery, retrieval_query: retrievalQuery, question };
+    }
+    const payload = await postJson("/api/qa/prepare", request);
     renderQaPayload(payload);
     refreshQaHistory();
   } catch (error) {
@@ -494,6 +543,14 @@ function displayedResults(payload) {
   if (payload.mode === "metadata") {
     return (payload.results || []).map((item) => normalizeResult(item, "metadata"));
   }
+  if (payload.mode === "agent_hybrid") {
+    return (payload.results || []).map((item) => ({
+      ...item,
+      ranking_mode: "frame",
+      score: item.score ?? item.raw_score ?? 0,
+      metadata: item.metadata || {},
+    }));
+  }
   if (activeRankingMode === "video") {
     return (payload.video_results || []).map(normalizeVideoResult);
   }
@@ -518,6 +575,7 @@ function renderResults(payload, resetReview = true) {
   }
   const resultKind = payload.mode === "metadata"
     ? "metadata results"
+    : payload.mode === "agent_hybrid" ? "agent candidates"
     : activeRankingMode === "video" ? "videos" : "frames";
   const candidates = (payload.raw_results || []).length || results.length;
   const statusItems = [`${results.length} ${resultKind}`];
@@ -529,6 +587,10 @@ function renderResults(payload, resetReview = true) {
     statusItems.push(`Union ${candidates}`);
     statusItems.push(`Candidates ${Number(payload.candidate_generation_ms || 0).toFixed(1)} ms`);
     statusItems.push(`RRF ${Number(payload.fusion_ms || 0).toFixed(1)} ms`);
+  } else if (payload.mode === "agent_hybrid") {
+    statusItems.push(payload.profile || "agent");
+    statusItems.push(`${Number(payload.latency_ms?.total || 0).toFixed(1)} ms`);
+    if (Object.keys(payload.failures || {}).length) statusItems.push("fallback active");
   } else {
     statusItems.push(`${Number(payload.elapsed_ms || 0).toFixed(1)} ms`);
   }
@@ -541,7 +603,9 @@ function renderResults(payload, resetReview = true) {
     const img = node.querySelector(".thumb");
     node.querySelector(".rank").textContent = `#${result.rank}`;
     node.querySelector(".video-id").textContent = result.video_id;
-    node.querySelector(".score-label").textContent = result.ranking_mode === "video" ? "Video score" : "Frame score";
+    node.querySelector(".score-label").textContent = payload.mode === "agent_hybrid"
+      ? "RRF score"
+      : result.ranking_mode === "video" ? "Video score" : "Frame score";
     node.querySelector(".score").textContent = Number(result.score).toFixed(4);
     node.querySelector(".title").textContent = result.metadata.title || "Untitled";
     node.querySelector(".keyframe").textContent = `${result.keyframe_id ?? "-"}`;
@@ -622,6 +686,21 @@ function normalizeResult(result, mode) {
 
 function renderEvidenceChips(container, result) {
   container.replaceChildren();
+  const retrieverRanks = result.provenance?.retriever_ranks;
+  if (retrieverRanks) {
+    for (const [retriever, rank] of Object.entries(retrieverRanks)) {
+      const chip = document.createElement("span");
+      const contribution = result.provenance?.contributions?.[retriever];
+      chip.className = `evidence-chip is-matched is-retriever-${retriever}`;
+      chip.textContent = `${retriever.toUpperCase()} #${rank}${contribution !== undefined ? ` · +${Number(contribution).toFixed(4)}` : ""}`;
+      container.appendChild(chip);
+    }
+    const source = document.createElement("span");
+    source.className = "evidence-chip is-source";
+    source.textContent = result.matched_text ? `${result.source_type} · ${result.matched_text.slice(0, 110)}` : result.source_type;
+    container.appendChild(source);
+    return;
+  }
   const evidence = result.evidence;
   if (!evidence?.fusion) return;
   const definitions = [];
@@ -715,11 +794,198 @@ function closeVideo() {
   }
 }
 
+function formatJson(value) {
+  return value === null || value === undefined ? "-" : JSON.stringify(value, null, 2);
+}
+
+function failureMessages(failures = {}) {
+  return Object.entries(failures).map(([channel, detail]) => {
+    if (typeof detail === "string") return `${channel}: ${detail}`;
+    if (detail && typeof detail === "object") return `${channel}: ${Object.values(detail).join("; ")}`;
+    return `${channel}: unavailable`;
+  });
+}
+
+function setAgentExecution(state, payload = {}) {
+  const stages = [...agentExecutionStrip.querySelectorAll("[data-agent-stage]")];
+  for (const stage of stages) stage.classList.remove("is-active", "is-complete", "is-error");
+  agentRunStateEl.className = "agent-run-state";
+  if (state === "running") {
+    stages[0]?.classList.add("is-active");
+    agentRunStateEl.classList.add("is-running");
+    agentRunStateEl.textContent = "Running";
+    return;
+  }
+  if (state === "error") {
+    stages[0]?.classList.add("is-error");
+    agentRunStateEl.classList.add("is-error");
+    agentRunStateEl.textContent = "Failed";
+    return;
+  }
+  if (state === "idle") {
+    agentRunStateEl.classList.add("is-idle");
+    agentRunStateEl.textContent = "Idle";
+    return;
+  }
+  for (const stage of stages) stage.classList.add("is-complete");
+  const fallback = payload.agent_trace?.status === "FALLBACK" || payload.agent_trace?.status === "UNAVAILABLE";
+  const partial = fallback || Object.keys(payload.failures || {}).length > 0;
+  agentRunStateEl.classList.add(partial ? "is-partial" : "is-ready");
+  agentRunStateEl.textContent = partial ? "Partial" : "Ready";
+}
+
+function setAgentInspectorTab(tabId) {
+  for (const tab of agentInspectorTabs) {
+    const active = tab.id === tabId;
+    tab.classList.toggle("is-active", active);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    const panel = document.querySelector(`#${tab.getAttribute("aria-controls")}`);
+    if (panel) panel.hidden = !active;
+  }
+}
+
+function appendAgentMetric(label, value) {
+  const metric = document.createElement("div");
+  const name = document.createElement("span");
+  const result = document.createElement("strong");
+  name.textContent = label;
+  result.textContent = value;
+  metric.append(name, result);
+  agentChannelMetricsEl.appendChild(metric);
+}
+
+function structuredSuggestionLabels(suggestions = {}) {
+  return [
+    suggestions.object_label && `Object: ${suggestions.object_label}`,
+    suggestions.attribute_color && `Color: ${suggestions.attribute_color}`,
+    suggestions.enable_ocr && "OCR text",
+    suggestions.enable_asr && "ASR speech",
+    suggestions.metadata_author && `Author: ${suggestions.metadata_author}`,
+    suggestions.metadata_date && `Date: ${suggestions.metadata_date}`,
+    suggestions.metadata_title && `Title: ${suggestions.metadata_title}`,
+  ].filter(Boolean);
+}
+
+function renderAgentPlan(plan, payload = {}) {
+  if (!plan) return;
+  const trace = payload.agent_trace || {};
+  agentPlanProfile.textContent = `${plan.intent || "mixed"} · ${plan.profile || "-"} · ${plan.planner_source || "local"}`;
+  agentClipQueryEl.textContent = plan.visual_clip_query_en || "-";
+  agentSemanticQueryEl.textContent = plan.semantic_text_query || "-";
+  agentLexicalQueryEl.textContent = plan.lexical_text_query || "-";
+  clipQueryInput.value = plan.visual_clip_query_en || "";
+
+  agentPlanTrace.replaceChildren();
+  const traceItems = [
+    `Routes: ${(plan.enabled_retrievers || []).join(" + ") || "-"}`,
+    ...Object.entries(plan.source_filters || {}).map(([name, sources]) => `${name}: ${sources.join(" + ")}`),
+    ...Object.entries(payload.channel_hit_counts || {}).map(([name, count]) => `${name}: ${count} hits`),
+    ...(plan.reasons || []),
+  ];
+  for (const text of traceItems) {
+    const item = document.createElement("span");
+    item.className = "agent-trace-item";
+    item.textContent = text;
+    agentPlanTrace.appendChild(item);
+  }
+  for (const warning of [...(plan.warnings || []), ...failureMessages(payload.failures)]) {
+    const item = document.createElement("span");
+    item.className = "agent-trace-item is-warning";
+    item.textContent = warning;
+    agentPlanTrace.appendChild(item);
+  }
+
+  agentGeminiStatusEl.textContent = trace.status || (plan.planner_source === "gemini" ? "SUCCEEDED" : "Not called");
+  agentGeminiModelEl.textContent = [trace.provider, trace.model].filter(Boolean).join(" / ") || "-";
+  agentGeminiLatencyEl.textContent = Number.isFinite(Number(trace.latency_ms)) ? `${Number(trace.latency_ms).toFixed(1)} ms` : "-";
+  agentGeminiRawEl.textContent = trace.raw_text || "No raw Gemini response. The local planner was used.";
+  agentGeminiParsedEl.textContent = formatJson(trace.parsed_output);
+  agentValidatedPlanEl.textContent = formatJson(trace.validated_plan || plan);
+  agentGeminiMessageEl.className = "agent-inline-message";
+  if (trace.status === "SUCCEEDED") {
+    agentGeminiMessageEl.classList.add("is-success");
+    agentGeminiMessageEl.textContent = trace.raw_text_truncated
+      ? "Gemini returned valid JSON. Raw text was truncated for safe display."
+      : "Gemini returned valid JSON and the validated plan was used for retrieval.";
+  } else {
+    agentGeminiMessageEl.classList.add("is-warning");
+    agentGeminiMessageEl.textContent = trace.fallback
+      ? `Gemini was not used successfully. Fallback: ${trace.fallback}`
+      : "Gemini was skipped or unavailable; deterministic local planning was used.";
+  }
+
+  const notes = [
+    ...(trace.normalization_notes || []),
+    ...(trace.warnings || []),
+    ...failureMessages(payload.failures),
+  ];
+  agentNormalizationNotesEl.replaceChildren();
+  for (const text of notes.length ? notes : ["No normalization or fallback warning."]) {
+    const item = document.createElement("li");
+    item.textContent = text;
+    agentNormalizationNotesEl.appendChild(item);
+  }
+
+  agentChannelMetricsEl.replaceChildren();
+  for (const [channel, count] of Object.entries(payload.channel_hit_counts || {})) {
+    const latency = payload.latency_ms?.[channel];
+    appendAgentMetric(channel.toUpperCase(), `${count} hits${latency !== undefined ? ` · ${Number(latency).toFixed(1)} ms` : ""}`);
+  }
+  if (payload.latency_ms?.total !== undefined) appendAgentMetric("Total", `${Number(payload.latency_ms.total).toFixed(1)} ms`);
+  if (!agentChannelMetricsEl.children.length) appendAgentMetric("Channels", "No channel metrics");
+
+  agentStructuredSuggestions = plan.structured_filter_suggestions || null;
+  const suggestionLabels = structuredSuggestionLabels(agentStructuredSuggestions || {});
+  agentStructuredSuggestionsEl.hidden = suggestionLabels.length === 0;
+  agentStructuredSummaryEl.textContent = suggestionLabels.length
+    ? `${suggestionLabels.join(" · ")}. Suggestions were not applied to this Agent run.`
+    : "No explicit structured constraint.";
+  setAgentExecution("ready", payload);
+}
+
+function applyAgentStructuredSuggestions() {
+  if (!agentStructuredSuggestions) return;
+  const unavailable = [];
+  if (agentStructuredSuggestions.enable_objects && !structuredSearchAvailable) unavailable.push("Objects");
+  if (agentStructuredSuggestions.enable_attributes && !attributeSearchAvailable) unavailable.push("Attributes");
+  if (agentStructuredSuggestions.enable_ocr && !ocrSearchAvailable) unavailable.push("OCR");
+  if (agentStructuredSuggestions.enable_asr && !asrSearchAvailable) unavailable.push("ASR");
+  setMode("visual");
+  applyStructuredConfig({
+    enabled: true,
+    enable_clip: true,
+    enable_objects: Boolean(agentStructuredSuggestions.enable_objects && structuredSearchAvailable),
+    object_label: agentStructuredSuggestions.object_label || "",
+    enable_attributes: Boolean(agentStructuredSuggestions.enable_attributes && attributeSearchAvailable),
+    attribute_color: agentStructuredSuggestions.attribute_color || "",
+    enable_ocr: Boolean(agentStructuredSuggestions.enable_ocr && ocrSearchAvailable),
+    enable_asr: Boolean(agentStructuredSuggestions.enable_asr && asrSearchAvailable),
+    enable_metadata: Boolean(agentStructuredSuggestions.enable_metadata),
+    metadata_author: agentStructuredSuggestions.metadata_author || "",
+    metadata_date: agentStructuredSuggestions.metadata_date || "",
+    metadata_title: agentStructuredSuggestions.metadata_title || "",
+    fusion_method: "rrf",
+  });
+  document.querySelector("#structured-filters").open = true;
+  setStatus(unavailable.length
+    ? `Structured suggestions loaded. Unavailable channels were skipped: ${unavailable.join(", ")}. Review filters, then Search.`
+    : "Structured suggestions loaded. Review filters, then Search.", unavailable.length > 0);
+  document.querySelector("#structured-filters").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
 async function runSearch(event) {
   event.preventDefault();
   const originalQuery = queryInput.value.trim();
   if (!originalQuery) {
     queryInput.focus();
+    return;
+  }
+  const isAgent = activeMode === "agent";
+  const queryId = agentQueryIdInput.value.trim();
+  if (isAgent && !queryId) {
+    agentQueryIdInput.focus();
+    setStatus("Query ID is required for Agent retrieval.", true);
     return;
   }
   let query = originalQuery;
@@ -742,17 +1008,24 @@ async function runSearch(event) {
     }
     searchButton.disabled = false;
     searchButton.innerHTML = searchButtonLabel;
-  } else {
+  } else if (!isAgent) {
     clipQueryInput.value = "";
   }
-  const params = new URLSearchParams({
-    q: query,
-    top_k: topKInput.value,
-    candidate_pool: candidatePoolInput.value,
-    max_frames_per_video: "1",
-    matched_frames_per_video: "5",
-    aggregation_method: "max",
-  });
+  const params = isAgent
+    ? new URLSearchParams({
+        query_id: queryId,
+        q: originalQuery,
+        top_k: topKInput.value,
+        use_gemini: String(agentUseGeminiInput.checked),
+      })
+    : new URLSearchParams({
+        q: query,
+        top_k: topKInput.value,
+        candidate_pool: candidatePoolInput.value,
+        max_frames_per_video: "1",
+        matched_frames_per_video: "5",
+        aggregation_method: "max",
+      });
   const structured = activeMode === "visual" ? structuredConfig() : { enabled: false };
   if (structured.enabled) {
     if (!structured.enable_clip && !structured.enable_objects && !structured.enable_attributes && !structured.enable_metadata) {
@@ -768,10 +1041,17 @@ async function runSearch(event) {
   }
   searchButton.disabled = true;
   const searchButtonLabel = searchButton.innerHTML;
-  searchButton.textContent = activeMode === "metadata" ? "Searching metadata..." : "Searching...";
-  setStatus(activeMode === "metadata" ? "Searching metadata..." : "Encoding query and searching...");
+  searchButton.textContent = activeMode === "metadata" ? "Searching metadata..." : isAgent ? "Agent searching..." : "Searching...";
+  setStatus(activeMode === "metadata" ? "Searching metadata..." : isAgent ? "Planning routes and retrieving evidence..." : "Encoding query and searching...");
+  if (isAgent) {
+    setAgentInspectorTab("agent-summary-tab");
+    setAgentExecution("running");
+    agentPlanProfile.textContent = "Analyzing query and waiting for retrieval";
+  }
   try {
-    const endpoint = activeMode === "metadata"
+    const endpoint = isAgent
+      ? "/api/agent-search"
+      : activeMode === "metadata"
       ? "/api/metadata-search"
       : structured.enabled ? "/api/structured-search" : "/api/search";
     if (activeMode === "metadata") {
@@ -782,13 +1062,15 @@ async function runSearch(event) {
     }
     const payload = await fetchJson(`${endpoint}?${params.toString()}`);
     payload.original_query = originalQuery;
-    payload.clip_query = activeMode === "visual" ? query : "";
+    payload.clip_query = isAgent ? payload.query_plan?.visual_clip_query_en || "" : activeMode === "visual" ? query : "";
     payload.mode = payload.mode || activeMode;
-    if (payload.query_plan) renderQueryPlan(payload.query_plan, payload.reranker);
+    if (isAgent) renderAgentPlan(payload.query_plan, payload);
+    else if (payload.query_plan) renderQueryPlan(payload.query_plan, payload.reranker);
     saveHistoryItem(originalQuery, payload.clip_query, activeMode, structured.enabled ? structured : null, payload.fusion_config || null);
     renderResults(payload);
     renderHistory();
   } catch (error) {
+    if (isAgent) setAgentExecution("error");
     setStatus(error.message, true);
   } finally {
     searchButton.disabled = false;
@@ -1448,20 +1730,28 @@ function renderHistory() {
 function setMode(mode) {
   activeMode = mode;
   const isVisual = mode === "visual";
+  const isAgent = mode === "agent";
+  const isMetadata = mode === "metadata";
   visualModeButton.classList.toggle("is-active", isVisual);
-  metadataModeButton.classList.toggle("is-active", !isVisual);
+  agentModeButton.classList.toggle("is-active", isAgent);
+  metadataModeButton.classList.toggle("is-active", isMetadata);
   visualModeButton.setAttribute("aria-pressed", String(isVisual));
-  metadataModeButton.setAttribute("aria-pressed", String(!isVisual));
+  agentModeButton.setAttribute("aria-pressed", String(isAgent));
+  metadataModeButton.setAttribute("aria-pressed", String(isMetadata));
   visualModeButton.setAttribute("aria-selected", String(isVisual));
-  metadataModeButton.setAttribute("aria-selected", String(!isVisual));
-  clipQueryInput.disabled = !isVisual;
+  agentModeButton.setAttribute("aria-selected", String(isAgent));
+  metadataModeButton.setAttribute("aria-selected", String(isMetadata));
+  clipQueryInput.disabled = isMetadata;
   candidatePoolInput.disabled = !isVisual;
   rankingTabs.hidden = !isVisual;
+  agentQueryIdField.hidden = !isAgent;
+  agentPlanPanel.hidden = !isAgent;
+  form.classList.toggle("is-agent", isAgent);
   updateStructuredControls();
   topKLabel.textContent = isVisual
     ? (activeRankingMode === "video" ? "Top videos" : "Top frames")
     : "Top results";
-  setStatus(isVisual ? "Visual search ready." : "Metadata search ready.");
+  setStatus(isVisual ? "Visual search ready." : isAgent ? "Agent retrieval ready." : "Metadata search ready.");
 }
 
 function setRankingMode(mode) {
@@ -1518,6 +1808,7 @@ async function loadHealth() {
         { text: payload.ocr_search_available ? "OCR on" : "OCR off", className: payload.ocr_search_available ? "is-success" : "" },
         { text: payload.asr_search_available ? "ASR on" : "ASR off", className: payload.asr_search_available ? "is-success" : "" },
         { text: payload.query_planner_available ? "planner ready" : "planner off", className: payload.query_planner_available ? "is-success" : "" },
+        { text: payload.hybrid_retrieval_enabled ? "hybrid ready" : "hybrid off", className: payload.hybrid_retrieval_enabled ? "is-success" : "" },
         { text: payload.reranker_available ? "reranker ready" : "reranker off", className: payload.reranker_available ? "is-success" : "" },
         { text: translation, className: payload.translation_configured ? "is-success" : "" },
       ];
@@ -1525,6 +1816,10 @@ async function loadHealth() {
     attributeSearchAvailable = Boolean(payload.attribute_search_available);
     ocrSearchAvailable = Boolean(payload.ocr_search_available);
     asrSearchAvailable = Boolean(payload.asr_search_available);
+    hybridRetrievalEnabled = Boolean(payload.hybrid_retrieval_enabled);
+    agentModeButton.disabled = !hybridRetrievalEnabled;
+    qaUseAgentRetrievalInput.disabled = !hybridRetrievalEnabled;
+    if (!hybridRetrievalEnabled) qaUseAgentRetrievalInput.checked = false;
     updateStructuredControls();
     healthEl.replaceChildren();
     for (const badge of badges) {
@@ -1543,7 +1838,33 @@ exportButton.addEventListener("click", exportCsv);
 exportPinsButton.addEventListener("click", exportPinnedCsv);
 clearHistoryButton.addEventListener("click", clearHistory);
 visualModeButton.addEventListener("click", () => setMode("visual"));
+agentModeButton.addEventListener("click", () => setMode("agent"));
 metadataModeButton.addEventListener("click", () => setMode("metadata"));
+for (const [index, tab] of agentInspectorTabs.entries()) {
+  tab.addEventListener("click", () => setAgentInspectorTab(tab.id));
+  tab.addEventListener("keydown", (event) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    const direction = event.key === 'ArrowRight' ? 1 : -1;
+    const next = agentInspectorTabs[(index + direction + agentInspectorTabs.length) % agentInspectorTabs.length];
+    setAgentInspectorTab(next.id);
+    next.focus();
+  });
+}
+for (const button of document.querySelectorAll(".agent-copy-button")) {
+  button.addEventListener("click", async () => {
+    const target = document.querySelector(`#${button.dataset.copyTarget}`);
+    try {
+      await navigator.clipboard.writeText(target?.textContent || "");
+      const original = button.textContent;
+      button.textContent = "Copied";
+      window.setTimeout(() => { button.textContent = original; }, 1200);
+    } catch {
+      setStatus("Could not copy Agent trace to the clipboard.", true);
+    }
+  });
+}
+agentApplyStructuredButton.addEventListener("click", applyAgentStructuredSuggestions);
 videoRankingButton.addEventListener("click", () => setRankingMode("video"));
 frameRankingButton.addEventListener("click", () => setRankingMode("frame"));
 structuredEnabledInput.addEventListener("change", updateStructuredControls);
@@ -1590,6 +1911,7 @@ videoDialog.addEventListener("cancel", (event) => {
 renderPins();
 renderHistory();
 updateStructuredControls();
+setAgentExecution("idle");
 renderEmptyResults("Ready to retrieve", "Enter a query above to explore ranked video moments.");
 loadHealth();
 refreshQaHistory();

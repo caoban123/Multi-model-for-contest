@@ -181,11 +181,17 @@ class TrakeWorkflow:
         started = time.perf_counter()
         raw_by_event: dict[str, list[dict[str, Any]]] | None = None
         request_stage_timings: dict[str, float] = {}
+        request_query_plans: dict[str, dict[str, Any]] = {}
+        hybrid_failures: dict[str, dict[str, str]] = {}
+        skipped_without_frame: dict[str, dict[str, int]] = {}
         pool_sizes = {event.event_id: event_pool_size for event in state.request.events}
         if self.request_retriever is not None and self.runtime_config.algorithm == "trake_v2":
             retrieval_limit = self.runtime_config.retrieval.topk_max if self.runtime_config.retrieval.adaptive_topk and self.runtime_config.features.adaptive_topk and not explicit_pool_size else event_pool_size
             raw_by_event = self.request_retriever(state.request, retrieval_limit)
             request_stage_timings = dict(getattr(raw_by_event, "stage_timings_ms", {}))
+            request_query_plans = dict(getattr(raw_by_event, "query_plans", {}))
+            hybrid_failures = dict(getattr(raw_by_event, "hybrid_failures", {}))
+            skipped_without_frame = dict(getattr(raw_by_event, "skipped_without_frame", {}))
             if self.runtime_config.retrieval.adaptive_topk and self.runtime_config.features.adaptive_topk and not explicit_pool_size:
                 pool_sizes = {
                     event.event_id: self._adaptive_pool_size(event, raw_by_event.get(event.event_id, []))
@@ -228,6 +234,10 @@ class TrakeWorkflow:
         else:
             state.stage_timings_ms[timing_key] = round(search_elapsed_ms, 3)
         state.diagnostics["retrieval"] = {
+            "hybrid_requested": bool(state.request.constraints.get("hybrid_retrieval")),
+            "hybrid_query_plans": request_query_plans,
+            "hybrid_failures": hybrid_failures,
+            "hybrid_skipped_without_frame": skipped_without_frame,
             "adaptive_topk": self.runtime_config.retrieval.adaptive_topk and self.runtime_config.features.adaptive_topk and not explicit_pool_size,
             "topk_by_event": pool_sizes,
             "anchor_event_id": anchor_event_id,

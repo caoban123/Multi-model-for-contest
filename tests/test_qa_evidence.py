@@ -55,3 +55,57 @@ def test_builder_is_deterministic_for_the_same_retrieval_response() -> None:
     first = build_evidence_pack(request, response())
     second = build_evidence_pack(request, response())
     assert [item.evidence_id for item in first.evidence_refs] == [item.evidence_id for item in second.evidence_refs]
+
+
+def test_builder_converts_hybrid_channel_provenance_to_typed_evidence() -> None:
+    hybrid_response = {
+        "mode": "agent_hybrid",
+        "profile": "clip_bge_bm25",
+        "query_plan": {"visual_clip_query_en": "news report about flooding"},
+        "video_results": [{
+            "video_id": "L21_V003",
+            "rank": 1,
+            "keyframe_id": 7,
+            "frame_idx": 210,
+            "pts_time": 7.0,
+            "keyframe_path": "data/keyframes/L21_V003/007.jpg",
+            "provenance": {
+                "fusion_version": "generic-video-rrf-v1",
+                "evidence": {
+                    "clip": {
+                        "source_type": "clip",
+                        "rank": 2,
+                        "raw_score": 0.81,
+                        "keyframe_id": 7,
+                        "frame_idx": 210,
+                        "pts_time": 7.0,
+                        "document_id": "L21_V003:7",
+                    },
+                    "bm25": {
+                        "source_type": "asr",
+                        "rank": 1,
+                        "raw_score": 5.4,
+                        "matched_text": "mua lon gay ngap tren dien rong",
+                        "document_id": "asr:L21_V003:segment-1",
+                        "provenance": {"start": 5.0, "end": 9.0},
+                    },
+                },
+            },
+        }],
+    }
+
+    pack = build_evidence_pack(
+        QaRequest("q4", "tin tuc ngap lut", "Khu vuc nao bi ngap?"),
+        hybrid_response,
+    )
+
+    asr = next(item for item in pack.evidence_refs if item.modality is EvidenceModality.ASR)
+    clip = next(item for item in pack.evidence_refs if item.modality is EvidenceModality.CLIP)
+    keyframe = next(item for item in pack.evidence_refs if item.modality is EvidenceModality.KEYFRAME)
+    assert asr.source == "hybrid_bm25"
+    assert asr.payload["matched_text"] == "mua lon gay ngap tren dien rong"
+    assert asr.payload["document_id"] == "asr:L21_V003:segment-1"
+    assert clip.source == "hybrid_clip"
+    assert keyframe.payload["keyframe_path"].endswith("007.jpg")
+    assert pack.modality_availability[EvidenceModality.ASR] is AvailabilityStatus.AVAILABLE
+    assert pack.retrieval_context["profile"] == "clip_bge_bm25"
