@@ -53,3 +53,20 @@ def test_review_is_append_only_and_export_requires_confirmation(tmp_path: Path) 
     assert record['confirmed_by']=='tester' and record['human_confirmed'] is True
     assert record['events'][0]['mapping']['source']=='validated_index_ref'
     assert 'algorithm_selection' in record['events'][0] and 'evidence' in record['events'][0]
+
+
+def test_store_v1_migrates_non_destructively_and_records_version(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute("INSERT INTO metadata VALUES('store_version','phase8-trake-store-v1')")
+        connection.execute("CREATE TABLE user_marker(value TEXT)")
+        connection.execute("INSERT INTO user_marker VALUES('preserve-me')")
+
+    store = TrakeStore(path)
+
+    with store.connect() as connection:
+        assert connection.execute("SELECT value FROM user_marker").fetchone()[0] == "preserve-me"
+        assert connection.execute("SELECT value FROM metadata WHERE key='store_version'").fetchone()[0] == "phase8-trake-store-v2"
+        migration = connection.execute("SELECT from_version,to_version FROM schema_migrations").fetchone()
+        assert tuple(migration) == ("phase8-trake-store-v1", "phase8-trake-store-v2")

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from collections import Counter
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any, Callable, Iterable
 
 from aic_retrieval.trake_schema import Availability, TrakeEvent, TrakeRequest
@@ -27,6 +28,7 @@ class TrakeCandidate:
     retrieval_method: str
     warnings: tuple[str, ...] = ()
     raw_scores: dict[str, float | None] = field(default_factory=dict)
+    raw_ranks: dict[str, int | None] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for name in ("event_id", "candidate_id", "video_id", "retrieval_method"):
@@ -47,6 +49,9 @@ class EventCandidatePool:
     candidates: tuple[TrakeCandidate, ...]
     modality_availability: dict[str, Availability]
     warnings: tuple[str, ...] = ()
+    topk_used: int | None = None
+    distinctiveness: float | None = None
+    distinctiveness_components: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,65 @@ def rank_normalized_score(rank: int, pool_size: int) -> float:
     return max(0.0, min(1.0, 1.0 - ((rank - 1) / (pool_size - 1))))
 
 
+def with_distinctiveness(pool: EventCandidatePool, settings: Any) -> EventCandidatePool:
+    """Attach an inspectable, configurable event distinctiveness score."""
+    candidates = pool.candidates
+    margin = 0.0
+    if candidates:
+        first = float(candidates[0].raw_scores.get("score") or candidates[0].local_score)
+        second = float(candidates[1].raw_scores.get("score") or candidates[1].local_score) if len(candidates) > 1 else 0.0
+        margin = max(0.0, min(1.0, (first - second) / max(abs(first), 1e-9)))
+    counts = Counter(candidate.video_id for candidate in candidates)
+    concentration = max(counts.values(), default=0) / max(1, len(candidates))
+    event = pool.event
+    structured_count = (
+        len(event.object_constraints)
+        + len(event.attribute_constraints)
+        + len(event.ocr_terms)
+        + len(event.asr_terms)
+        + max(0, len(event.modalities) - 1)
+    )
+    constraint = min(1.0, structured_count / 4.0)
+    lexical = min(1.0, len((event.visual_query or event.clip_query).split()) / 10.0)
+    weights = {
+        "margin": float(settings.margin_weight),
+        "video_concentration": float(settings.video_concentration_weight),
+        "constraint": float(settings.constraint_weight),
+        "lexical": float(settings.lexical_weight),
+    }
+    components = {
+        "margin": margin,
+        "video_concentration": concentration,
+        "constraint": constraint,
+        "lexical": lexical,
+    }
+    total_weight = sum(weights.values())
+    score = sum(components[name] * weights[name] for name in components) / total_weight
+    return replace(pool, distinctiveness=round(score, 6), distinctiveness_components=components)
+
+
+def select_anchor_event(
+    request: TrakeRequest,
+    pools: Iterable[EventCandidatePool],
+) -> tuple[str | None, dict[str, Any]]:
+    """Select one evidence-driven required anchor; never a fixed event index."""
+    by_event = {pool.event.event_id: pool for pool in pools}
+    eligible = [event for event in request.events if event.required and event.event_id in by_event]
+    if not eligible:
+        return None, {"reason": "NO_REQUIRED_EVENT_POOL", "scores": {}}
+    scores = {event.event_id: float(by_event[event.event_id].distinctiveness or 0.0) for event in eligible}
+    anchor = min(
+        eligible,
+        key=lambda event: (
+            -scores[event.event_id],
+            -max((candidate.local_score for candidate in by_event[event.event_id].candidates), default=0.0),
+            event.order,
+            event.event_id,
+        ),
+    )
+    return anchor.event_id, {"reason": "MAX_DISTINCTIVENESS_REQUIRED_EVENT", "scores": scores}
+
+
 class TrakeRetrievalAdapter:
     """Adapt existing retrieval results into deterministic per-event pools.
 
@@ -91,12 +155,13 @@ class TrakeRetrievalAdapter:
         pool_size: int = 60,
         max_per_video: int = 8,
         availability: dict[str, Availability] | None = None,
+        raw_results: Iterable[dict[str, Any]] | None = None,
     ) -> EventCandidatePool:
-        if not 30 <= pool_size <= 100:
-            raise ValueError("event pool_size must be between 30 and 100")
-        if not 5 <= max_per_video <= 10:
-            raise ValueError("max_per_video must be between 5 and 10")
-        raw = list(self.retriever(event, pool_size))[:pool_size]
+        if not 1 <= pool_size <= 1000:
+            raise ValueError("event pool_size must be between 1 and 1000")
+        if not 1 <= max_per_video <= 64:
+            raise ValueError("max_per_video must be between 1 and 64")
+        raw = list(self.retriever(event, pool_size) if raw_results is None else raw_results)[:pool_size]
         counts: dict[str, int] = {}
         candidates: list[TrakeCandidate] = []
         warnings: list[str] = []
@@ -125,6 +190,8 @@ class TrakeRetrievalAdapter:
                 for key in ("score", "clip_score", "object_score", "attribute_score", "ocr_score", "asr_score", "metadata_score")
                 if key in item
             }
+            raw_scores.update({str(key): value for key, value in dict(item.get("raw_modality_scores") or {}).items()})
+            raw_ranks = {str(key): int(value) if value is not None else None for key, value in dict(item.get("raw_modality_ranks") or {}).items()}
             provenance = tuple(item.get("provenance") or ("clip",))
             evidence = dict(item.get("evidence") or {})
             candidate_warnings = tuple(item.get("warnings") or ())
@@ -144,9 +211,10 @@ class TrakeRetrievalAdapter:
                     retrieval_method=str(item.get("retrieval_method") or "existing_rank_adapter"),
                     warnings=candidate_warnings,
                     raw_scores=raw_scores,
+                    raw_ranks=raw_ranks,
                 )
             )
-        return EventCandidatePool(event, tuple(candidates), statuses, tuple(dict.fromkeys(warnings)))
+        return EventCandidatePool(event, tuple(candidates), statuses, tuple(dict.fromkeys(warnings)), topk_used=pool_size)
 
     def retrieve_request(
         self,
@@ -155,9 +223,17 @@ class TrakeRetrievalAdapter:
         pool_size: int = 60,
         max_per_video: int = 8,
         availability: dict[str, Availability] | None = None,
+        pool_sizes: dict[str, int] | None = None,
+        raw_by_event: dict[str, Iterable[dict[str, Any]]] | None = None,
     ) -> tuple[EventCandidatePool, ...]:
         return tuple(
-            self.retrieve_event(event, pool_size=pool_size, max_per_video=max_per_video, availability=availability)
+            self.retrieve_event(
+                event,
+                pool_size=(pool_sizes or {}).get(event.event_id, pool_size),
+                max_per_video=max_per_video,
+                availability=availability,
+                raw_results=(raw_by_event or {}).get(event.event_id),
+            )
             for event in request.events
         )
 
@@ -167,9 +243,10 @@ def group_candidates_by_video(
     pools: Iterable[EventCandidatePool],
     *,
     video_pool_size: int = 20,
+    anchor_event_id: str | None = None,
 ) -> tuple[VideoCandidate, ...]:
-    if not 10 <= video_pool_size <= 30:
-        raise ValueError("video_pool_size must be between 10 and 30")
+    if not 1 <= video_pool_size <= 100:
+        raise ValueError("video_pool_size must be between 1 and 100")
     by_event = {pool.event.event_id: pool for pool in pools}
     video_ids = sorted({item.video_id for pool in by_event.values() for item in pool.candidates})
     required = [event for event in request.events if event.required]
@@ -201,6 +278,7 @@ def group_candidates_by_video(
             not item.complete,
             -item.required_coverage,
             -item.optional_coverage,
+            -max((candidate.local_score for candidate in item.event_candidates.get(anchor_event_id or "", ())), default=0.0),
             -sum(candidate.local_score for values in item.event_candidates.values() for candidate in values[:1]),
             item.video_id,
         )

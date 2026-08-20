@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import sqlite3
 import time
+import traceback
 from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,12 +13,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import numpy as np
+
 from aic_retrieval.search import (
     aggregate_results_by_video,
     diversify_results_by_video,
     load_numpy_index,
     load_registry,
     search_numpy_index,
+    search_numpy_index_batch,
     validate_numpy_index,
 )
 from aic_retrieval.metadata_search import load_metadata_documents, results_to_dict, search_metadata
@@ -36,10 +41,12 @@ from aic_retrieval.qa_schema import AvailabilityStatus, EvidenceModality, QaRequ
 from aic_retrieval.qa_workflow import QaWorkflow, jsonable, state_payload
 from aic_retrieval.qa_store import QaStore
 from aic_retrieval.qa_gemini_answering import GeminiEvidenceAnswerer
-from aic_retrieval.trake_schema import Availability, TrakeEvent
-from aic_retrieval.trake_workflow import TrakeWorkflow
+from aic_retrieval.trake_schema import Availability, TrakeEvent, TrakeRequest
+from aic_retrieval.trake_workflow import TrakeDomainError, TrakeWorkflow
 from aic_retrieval.trake_store import TrakeStore
-from aic_retrieval.trake_refinement import DenseRefiner
+from aic_retrieval.trake_refinement import DenseRefiner, DenseWindowExpander
+from aic_retrieval.trake_config import TrakeRuntimeConfig, load_trake_config
+from aic_retrieval.provenance import fingerprint_json
 
 
 DEFAULT_TOP_K_VIDEOS = 12
@@ -73,6 +80,13 @@ class RetrievalUiConfig:
     trake_store_path: Path | None = None
     trake_static_dir: Path | None = None
     trake_refinement_dir: Path | None = None
+    trake_config_path: Path | None = None
+
+
+class TimedEventResults(dict[str, list[dict[str, Any]]]):
+    def __init__(self, values: dict[str, list[dict[str, Any]]], stage_timings_ms: dict[str, float]) -> None:
+        super().__init__(values)
+        self.stage_timings_ms = stage_timings_ms
 
 
 class RetrievalUiService:
@@ -106,6 +120,7 @@ class RetrievalUiService:
             for doc in self.metadata_docs
         }
         self.encoder: ClipTextEncoder | None = None
+        self.trake_text_embedding_cache: dict[tuple[str, str], np.ndarray] = {}
         self.translator = ExternalTranslator(config.translation or TranslationConfig())
         self.object_service: ObjectSearchService | None = None
         if config.object_store_path is not None and config.object_store_path.is_file():
@@ -117,78 +132,199 @@ class RetrievalUiService:
         self.reranker_config = load_reranker_config(config.phase6_config_path) if config.phase6_config_path and config.phase6_config_path.is_file() else RerankerConfig()
         phase6_payload = json.loads(config.phase6_config_path.read_text(encoding="utf-8")) if config.phase6_config_path and config.phase6_config_path.is_file() else {}
         self.rrf_config = RrfConfig(**phase6_payload.get("fusion", {}))
+        self.trake_runtime_config = (
+            load_trake_config(config.trake_config_path)
+            if config.trake_config_path and config.trake_config_path.is_file()
+            else TrakeRuntimeConfig.legacy()
+        )
         self.structured_generator = StructuredCandidateGenerator(self.index, self.refs, self.object_service, self.metadata_docs, self.attribute_service, self.phase5_service)
         self.qa_workflow = QaWorkflow(store=QaStore(config.qa_store_path) if config.qa_store_path else None)
+        retrieval_settings = self.trake_runtime_config.retrieval
         modality_availability = {
-            "clip": Availability.AVAILABLE,
-            "object": Availability.AVAILABLE if self.object_service else Availability.UNAVAILABLE,
-            "attribute": Availability.AVAILABLE if self.attribute_service.available else Availability.UNAVAILABLE,
-            "ocr": Availability.UNKNOWN if self.phase5_service and self.phase5_service.available else Availability.UNAVAILABLE,
-            "asr": Availability.UNKNOWN if self.phase5_service and self.phase5_service.available else Availability.UNAVAILABLE,
-            "metadata": Availability.AVAILABLE if self.metadata_docs else Availability.UNAVAILABLE,
+            "clip": Availability.AVAILABLE if retrieval_settings.clip_enabled else Availability.UNAVAILABLE,
+            "object": Availability.AVAILABLE if retrieval_settings.object_enabled and self.object_service else Availability.UNAVAILABLE,
+            "attribute": Availability.AVAILABLE if retrieval_settings.attribute_enabled and self.attribute_service.available else Availability.UNAVAILABLE,
+            "ocr": Availability.UNKNOWN if retrieval_settings.ocr_enabled and self.phase5_service and self.phase5_service.available else Availability.UNAVAILABLE,
+            "asr": Availability.UNKNOWN if retrieval_settings.asr_enabled and self.phase5_service and self.phase5_service.available else Availability.UNAVAILABLE,
+            "metadata": Availability.AVAILABLE if retrieval_settings.metadata_enabled and self.metadata_docs else Availability.UNAVAILABLE,
         }
+        phase5_version = _sqlite_metadata_value(config.phase5_store_path, "store_version")
+        clip_model_fingerprint = fingerprint_json({"model_id": config.clip_model_id})
+        index_fingerprint = fingerprint_json(self.index_metadata)
+        session_provenance = {
+            "index_fingerprint": index_fingerprint,
+            "clip_model_fingerprint": clip_model_fingerprint,
+            "siglip_model_fingerprint": None,
+            "ocr_store_version": phase5_version if _sqlite_row_count(config.phase5_store_path, "ocr") > 0 else None,
+            "asr_store_version": phase5_version if _sqlite_row_count(config.phase5_store_path, "asr") > 0 else None,
+            "object_store_version": _sqlite_metadata_value(config.object_store_path, "store_version"),
+            "mapping_version": self.index_metadata.get("mapping_source_fingerprint"),
+        }
+        refinement_dir = config.trake_refinement_dir or (config.repo_root / "artifacts" / "trake" / "refinement")
+        self.trake_window_expander = DenseWindowExpander(
+            config.repo_root,
+            self.assets_by_video,
+            refinement_dir,
+            self._trake_frame_scores,
+            config=self.trake_runtime_config.refinement.to_refinement_config(),
+            model_fingerprint=clip_model_fingerprint,
+            config_fingerprint=self.trake_runtime_config.fingerprint,
+            index_fingerprint=index_fingerprint,
+            candidates_per_event=self.trake_runtime_config.dante.dense_candidates_per_event,
+        )
         self.trake_workflow = TrakeWorkflow(
             self._trake_retrieve_event,
             modality_availability=modality_availability,
             store=TrakeStore(config.trake_store_path) if config.trake_store_path else None,
+            runtime_config=self.trake_runtime_config,
+            session_provenance=session_provenance,
+            request_retriever=self._trake_retrieve_request,
+            window_expander=self.trake_window_expander,
         )
         self.trake_refiner = DenseRefiner(
             config.repo_root, self.assets_by_video,
-            config.trake_refinement_dir or (config.repo_root / "artifacts" / "trake" / "refinement"),
+            refinement_dir,
             self._trake_frame_scores,
+            config=self.trake_runtime_config.refinement.to_refinement_config(),
         )
 
-    def _trake_retrieve_event(self, event: TrakeEvent, pool_size: int) -> list[dict[str, Any]]:
+    def _trake_retrieve_request(self, request: TrakeRequest, pool_size: int) -> dict[str, list[dict[str, Any]]]:
+        query_entries: list[tuple[str, str]] = []
+        event_by_id = {event.event_id: event for event in request.events}
+        if self.trake_runtime_config.retrieval.clip_enabled:
+            for event in request.events:
+                if "clip" not in event.modalities:
+                    continue
+                variants = (
+                    tuple(dict.fromkeys((event.visual_query or event.clip_query, *event.query_variants)))
+                    if self.trake_runtime_config.features.query_variants
+                    else (event.visual_query or event.clip_query,)
+                )
+                query_entries.extend((event.event_id, variant) for variant in variants if variant.strip())
+        clip_by_event: dict[str, list[tuple[str, list[Any]]]] = {event.event_id: [] for event in request.events}
+        embedding_ms = 0.0
+        vector_search_ms = 0.0
+        if query_entries:
+            cache_size = self.trake_runtime_config.retrieval.text_embedding_cache_size
+            model_key = str(self.trake_workflow.session_provenance.get("clip_model_fingerprint") or self.config.clip_model_id)
+            unique_variants = list(dict.fromkeys(variant for _, variant in query_entries))
+            missing = [variant for variant in unique_variants if (model_key, variant) not in self.trake_text_embedding_cache]
+            vectors_by_variant = {
+                variant: self.trake_text_embedding_cache[(model_key, variant)]
+                for variant in unique_variants
+                if (model_key, variant) in self.trake_text_embedding_cache
+            }
+            embedding_started = time.perf_counter()
+            if missing:
+                try:
+                    encoded = self._encoder().encode_texts(missing)
+                except (ImportError, OSError, RuntimeError) as exc:
+                    raise TrakeDomainError(
+                        "RETRIEVAL_UNAVAILABLE",
+                        "local text encoder is unavailable; preload the configured model or allow its download",
+                        stage="RETRIEVAL",
+                    ) from exc
+                for variant, vector in zip(missing, encoded):
+                    vectors_by_variant[variant] = vector
+                    if cache_size > 0:
+                        while len(self.trake_text_embedding_cache) >= cache_size:
+                            self.trake_text_embedding_cache.pop(next(iter(self.trake_text_embedding_cache)))
+                        self.trake_text_embedding_cache[(model_key, variant)] = vector
+            vectors = np.stack([vectors_by_variant[variant] for _, variant in query_entries])
+            embedding_ms = (time.perf_counter() - embedding_started) * 1000
+            vector_started = time.perf_counter()
+            result_batches = search_numpy_index_batch(self.index, self.refs, vectors, pool_size)
+            vector_search_ms = (time.perf_counter() - vector_started) * 1000
+            for (event_id, variant), results in zip(query_entries, result_batches):
+                clip_by_event[event_id].append((variant, results))
+        timing_sink = {"fusion": 0.0}
+        channel_started = time.perf_counter()
+        values = {
+            event_id: self._trake_retrieve_event(event, pool_size, clip_by_event.get(event_id, []), timing_sink=timing_sink)
+            for event_id, event in event_by_id.items()
+        }
+        channel_ms = (time.perf_counter() - channel_started) * 1000
+        return TimedEventResults(values, {
+            "embedding": round(embedding_ms, 3),
+            "retrieval": round(vector_search_ms + max(0.0, channel_ms - timing_sink["fusion"]), 3),
+            "fusion": round(timing_sink["fusion"], 3),
+        })
+
+    def _trake_retrieve_event(self, event: TrakeEvent, pool_size: int, clip_results: list[tuple[str, list[Any]]] | None = None, timing_sink: dict[str, float] | None = None) -> list[dict[str, Any]]:
         fused: dict[tuple[str, int], dict[str, Any]] = {}
         ref_by_key = self.structured_generator.ref_by_key
 
-        def add(video_id: str, keyframe_id: int, modality: str, rank: int, score: float | None, evidence: dict[str, Any]) -> None:
+        def add(video_id: str, keyframe_id: int, modality: str, rank: int, score: float | None, evidence: dict[str, Any], *, source_key: str | None = None, query_variant: str | None = None) -> None:
             ref = ref_by_key.get((video_id, keyframe_id))
             if ref is None: return
-            item = fused.setdefault((video_id,keyframe_id), {**asdict(ref),"provenance":[],"evidence":{"fps":ref.fps},"raw_modality_scores":{},"rrf_score":0.0})
+            item = fused.setdefault((video_id,keyframe_id), {**asdict(ref),"provenance":[],"evidence":{"fps":ref.fps},"raw_modality_scores":{},"raw_modality_ranks":{},"rrf_score":0.0})
             if modality not in item["provenance"]: item["provenance"].append(modality)
-            item["evidence"].setdefault(modality,[]).append(evidence)
-            item["raw_modality_scores"][modality]=score
-            item["rrf_score"] += 1.0/(60.0+rank)
+            evidence_row = {**evidence, "query_variant": query_variant} if query_variant else evidence
+            item["evidence"].setdefault(modality,[]).append(evidence_row)
+            source_key = source_key or modality
+            item["raw_modality_scores"][source_key]=score
+            item["raw_modality_ranks"][source_key]=rank
+            weight = float(self.trake_runtime_config.fusion.weights.get(modality, 1.0))
+            item["rrf_score"] += weight / (float(self.trake_runtime_config.fusion.rrf_k) + rank)
 
         query_vector = None
-        if "clip" in event.modalities:
-            query_vector = self._encoder().encode_text(event.clip_query)
-            for result in search_numpy_index(self.index,self.refs,query_vector,top_k=pool_size):
-                add(result.video_id,result.keyframe_id,"clip",result.rank,result.score,{"rank":result.rank,"score":result.score})
-        if "object" in event.modalities and self.object_service:
+        settings = self.trake_runtime_config.retrieval
+        if "clip" in event.modalities and settings.clip_enabled:
+            if clip_results is None:
+                query_vector = self._encoder().encode_text(event.visual_query or event.clip_query)
+                clip_results = [(event.visual_query or event.clip_query, search_numpy_index(self.index,self.refs,query_vector,top_k=pool_size))]
+            for variant_index, (variant, results) in enumerate(clip_results):
+                for result in results:
+                    add(
+                        result.video_id,
+                        result.keyframe_id,
+                        "clip",
+                        result.rank,
+                        result.score,
+                        {"rank":result.rank,"score":result.score},
+                        source_key=f"clip_variant_{variant_index}",
+                        query_variant=variant,
+                    )
+        routing_enabled = self.trake_runtime_config.features.modality_routing
+        if routing_enabled and "object" in event.modalities and settings.object_enabled and self.object_service:
             for constraint in event.object_constraints:
                 labels=tuple(str(value) for value in constraint.get("labels",()) if str(value))
                 if not labels and constraint.get("label"): labels=(str(constraint["label"]),)
                 if not labels: continue
                 result=self.object_service.search(ObjectPredicate(labels,str(constraint.get("count_operator",">=")),int(constraint.get("count",1)),str(constraint.get("horizontal","any")),str(constraint.get("vertical","any"))),ObjectSearchConfig(float(constraint.get("min_confidence",.3)),float(constraint.get("nms_iou_threshold",.5))))
                 for row in result["results"][:pool_size]: add(row["video_id"],row["keyframe_id"],"object",int(row["object_rank"]),float(row["object_score"]),row)
-        if "attribute" in event.modalities and self.attribute_service.available:
+        if routing_enabled and "attribute" in event.modalities and settings.attribute_enabled and self.attribute_service.available:
             for raw_constraint in event.attribute_constraints:
                 constraint=parse_color_constraint(event.clip_query,str(raw_constraint.get("color", "")),str(raw_constraint.get("filter_mode","soft")))
                 if constraint is None: continue
                 candidate_keys=set(fused) or None
                 for row in self.attribute_service.search(constraint,candidate_keys)["results"][:pool_size]: add(row["video_id"],row["keyframe_id"],"attribute",int(row["attribute_rank"]),float(row["attribute_score"]),row)
         if self.phase5_service and self.phase5_service.available:
-            if "ocr" in event.modalities:
+            if routing_enabled and "ocr" in event.modalities and settings.ocr_enabled:
                 rows=self.phase5_service.search_ocr(event.clip_query,pool_size,float((event.ocr_constraints or ({},))[0].get("min_confidence",0)))
                 for row in rows:
                     if row.get("keyframe_id") is not None: add(row["video_id"],int(row["keyframe_id"]),"ocr",int(row["ocr_rank"]),float(row["ocr_score"]),row)
-            if "asr" in event.modalities:
+            if routing_enabled and "asr" in event.modalities and settings.asr_enabled:
                 for row in self.phase5_service.search_asr(event.clip_query,pool_size):
                     if row.get("keyframe_id") is not None: add(row["video_id"],int(row["keyframe_id"]),"asr",int(row["asr_rank"]),float(row["asr_score"]),row)
+        fusion_started = time.perf_counter()
         ordered=sorted(fused.values(),key=lambda item:(-item["rrf_score"],item["video_id"],item["keyframe_id"]))[:pool_size]
         for rank,item in enumerate(ordered,1):
-            item.update({"rank":rank,"score":item["rrf_score"],"retrieval_method":"rank_fusion_existing_channels_v1"})
+            method = "rank_fusion_existing_channels_v2" if self.trake_runtime_config.algorithm == "trake_v2" else "rank_fusion_existing_channels_v1"
+            item.update({"rank":rank,"score":item["rrf_score"],"retrieval_method":method})
+            for modality, raw_score in item["raw_modality_scores"].items():
+                item[f"{modality}_score"] = raw_score
+        if timing_sink is not None:
+            timing_sink["fusion"] = timing_sink.get("fusion", 0.0) + ((time.perf_counter() - fusion_started) * 1000)
         return ordered
 
     def trake_plan(self, query_id: str, query: str, manual_events: list[str] | None = None, constraints: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.trake_workflow.plan(query_id, query, manual_events=manual_events, constraints=constraints)
 
-    def trake_search(self, session_id: str, event_pool_size: int = 60, max_per_video: int = 8, video_pool_size: int = 20) -> dict[str, Any]:
+    def trake_search(self, session_id: str, event_pool_size: int | None = None, max_per_video: int | None = None, video_pool_size: int | None = None) -> dict[str, Any]:
         return self.trake_workflow.search(session_id, event_pool_size=event_pool_size, max_per_video=max_per_video, video_pool_size=video_pool_size)
 
-    def trake_align(self, session_id: str, top_k_per_video: int = 5, top_videos: int = 20) -> dict[str, Any]:
+    def trake_align(self, session_id: str, top_k_per_video: int | None = None, top_videos: int | None = None) -> dict[str, Any]:
         return self.trake_workflow.align(session_id, top_k_per_video=top_k_per_video, top_videos=top_videos)
 
     def trake_session(self, session_id: str) -> dict[str, Any]:
@@ -752,7 +888,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "qa_persistence": "sqlite" if getattr(service, "qa_workflow", None) and service.qa_workflow.store else "memory_until_p7_5",
                         "trake_available": hasattr(service, "trake_plan"),
                         "trake_scope": "L21",
-                        "trake_vlm_enabled": False,
+                        "trake_vlm_enabled": bool(getattr(getattr(service, "trake_runtime_config", None), "vlm", None) and service.trake_runtime_config.vlm.enabled),
                     }
                 )
             elif parsed.path == "/api/search":
@@ -772,7 +908,15 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             elif parsed.path == "/api/qa/sessions":
                 self._handle_qa_sessions()
             elif parsed.path == "/api/trake/health":
-                self._json({"ok": True, "available": hasattr(service, "trake_plan"), "group": "L21", "vlm_enabled": False})
+                runtime = getattr(service, "trake_runtime_config", None)
+                self._json({
+                    "ok": True,
+                    "available": hasattr(service, "trake_plan"),
+                    "group": "L21",
+                    "vlm_enabled": bool(runtime and runtime.vlm.enabled),
+                    "algorithm": getattr(runtime, "algorithm", None),
+                    "config_fingerprint": getattr(runtime, "fingerprint", None),
+                })
             elif parsed.path.startswith("/api/trake/session/"):
                 self._handle_trake_session(parsed.path.removeprefix("/api/trake/session/"))
             elif parsed.path == "/api/trake/sessions":
@@ -822,11 +966,15 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 elif self.path == "/api/trake/search":
                     result = service.trake_search(
                         str(payload.get("session_id") or ""),
-                        int(payload.get("event_pool_size", 60)), int(payload.get("max_per_video", 8)), int(payload.get("video_pool_size", 20)),
+                        int(payload["event_pool_size"]) if payload.get("event_pool_size") is not None else None,
+                        int(payload["max_per_video"]) if payload.get("max_per_video") is not None else None,
+                        int(payload["video_pool_size"]) if payload.get("video_pool_size") is not None else None,
                     )
                 elif self.path == "/api/trake/align":
                     result = service.trake_align(
-                        str(payload.get("session_id") or ""), int(payload.get("top_k_per_video", 5)), int(payload.get("top_videos", 20)),
+                        str(payload.get("session_id") or ""),
+                        int(payload["top_k_per_video"]) if payload.get("top_k_per_video") is not None else None,
+                        int(payload["top_videos"]) if payload.get("top_videos") is not None else None,
                     )
                 elif self.path == "/api/trake/update-plan":
                     result = service.trake_update_plan(str(payload.get("session_id") or ""), list(payload.get("events") or []), dict(payload["constraints"]) if payload.get("constraints") is not None else None)
@@ -843,8 +991,18 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 else:
                     self._error(HTTPStatus.NOT_FOUND, "not found")
                     return
-            except Exception as exc:
+            except TrakeDomainError as exc:
+                self._domain_error(HTTPStatus.UNPROCESSABLE_ENTITY, exc.code, exc.user_message, exc.stage)
+                return
+            except KeyError as exc:
+                self._error(HTTPStatus.NOT_FOUND, str(exc))
+                return
+            except ValueError as exc:
                 self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            except Exception:
+                traceback.print_exc()
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal server error")
                 return
             self._json(result)
 
@@ -949,8 +1107,12 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
         def _handle_trake_session(self, session_id: str) -> None:
             try:
                 payload = service.trake_session(session_id)
-            except Exception as exc:
+            except KeyError as exc:
+                self._error(HTTPStatus.NOT_FOUND, str(exc)); return
+            except ValueError as exc:
                 self._error(HTTPStatus.BAD_REQUEST, str(exc)); return
+            except Exception:
+                self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "internal server error"); return
             self._json(payload)
 
         def _handle_neighborhood(self, query_string: str) -> None:
@@ -1108,6 +1270,14 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.end_headers()
             self.wfile.write(body)
 
+        def _domain_error(self, status: HTTPStatus, code: str, message: str, stage: str) -> None:
+            body = json.dumps({"ok": False, "error": message, "code": code, "failure_stage": stage}, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
     server = ThreadingHTTPServer((host, port), Handler)
     return server
 
@@ -1134,6 +1304,30 @@ def parse_bool(value: str) -> bool:
     if normalized in {"1","true","yes","on"}: return True
     if normalized in {"0","false","no","off"}: return False
     raise ValueError(f"invalid boolean: {value}")
+
+
+def _sqlite_metadata_value(path: Path | None, key: str) -> str | None:
+    if path is None or not path.is_file():
+        return None
+    try:
+        uri = f"file:{path.resolve().as_posix()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as connection:
+            row = connection.execute("SELECT value FROM metadata WHERE key=?", (key,)).fetchone()
+        return str(row[0]) if row else None
+    except sqlite3.Error:
+        return None
+
+
+def _sqlite_row_count(path: Path | None, table: str) -> int:
+    if path is None or not path.is_file() or table not in {"ocr", "asr"}:
+        return 0
+    try:
+        uri = f"file:{path.resolve().as_posix()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as connection:
+            row = connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+        return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return 0
 
 
 def parse_object_position(value: str) -> tuple[str, str]:

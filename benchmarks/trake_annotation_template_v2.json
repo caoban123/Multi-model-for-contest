@@ -1,0 +1,33 @@
+{
+  "version": "phase8-trake-annotations-v2",
+  "split": "development",
+  "annotation_status": "UNLABELLED_TEMPLATE",
+  "label_policy": {
+    "timestamp_unit": "pts_seconds",
+    "interval_inclusive": true,
+    "required_events_only_for_primary_coverage": true,
+    "keyframe_id_is_not_a_timestamp_label": true
+  },
+  "queries": [
+    {
+      "query_id": "",
+      "query": "",
+      "categories": [],
+      "expected_video_id": null,
+      "events": [
+        {
+          "event_id": "e1",
+          "required": true,
+          "description": "",
+          "start_pts": null,
+          "end_pts": null,
+          "representative_pts": null,
+          "annotation_notes": ""
+        }
+      ],
+      "annotator": "",
+      "annotated_at": null,
+      "notes": "Do not mark LABELLED until video identity and every required event interval have been manually verified."
+    }
+  ]
+}

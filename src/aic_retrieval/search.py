@@ -259,6 +259,44 @@ def search_numpy_index(index: np.ndarray, refs: list[FrameRef], query: np.ndarra
     return results
 
 
+def search_numpy_index_batch(
+    index: np.ndarray,
+    refs: list[FrameRef],
+    queries: np.ndarray,
+    top_k: int,
+) -> list[list[SearchResult]]:
+    """Search several normalized text vectors with one matrix multiplication."""
+    matrix = np.asarray(queries, dtype="float32")
+    if matrix.ndim != 2 or matrix.shape[1] != index.shape[1]:
+        raise ValueError(f"query matrix must have shape (n, {index.shape[1]})")
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    if np.any(norms == 0):
+        raise ValueError("query vectors must be non-zero")
+    matrix = matrix / norms
+    score_matrix = index @ matrix.T
+    results: list[list[SearchResult]] = []
+    for column in range(score_matrix.shape[1]):
+        scores = score_matrix[:, column]
+        limit = min(top_k, len(scores))
+        if limit <= 0:
+            results.append([])
+            continue
+        if limit == len(scores):
+            candidate_indices = np.arange(len(scores))
+        else:
+            cutoff = float(np.partition(scores, len(scores) - limit)[len(scores) - limit])
+            above_cutoff = np.flatnonzero(scores > cutoff)
+            cutoff_ties = np.flatnonzero(scores == cutoff)
+            candidate_indices = np.concatenate([above_cutoff, cutoff_ties[: limit - len(above_cutoff)]])
+        ranked_indices = candidate_indices[np.lexsort((candidate_indices, -scores[candidate_indices]))]
+        rows: list[SearchResult] = []
+        for rank, idx in enumerate(ranked_indices, start=1):
+            ref = refs[int(idx)]
+            rows.append(SearchResult(rank, float(scores[int(idx)]), ref.video_id, ref.group, ref.keyframe_id, ref.frame_idx, ref.pts_time, ref.fps, ref.keyframe_path))
+        results.append(rows)
+    return results
+
+
 def diversify_results_by_video(results: list[SearchResult], max_frames_per_video: int) -> list[SearchResult]:
     if max_frames_per_video <= 0:
         raise ValueError("max_frames_per_video must be positive")

@@ -12,6 +12,8 @@ from typing import Any
 
 
 TRAKE_SCHEMA_VERSION = "phase8-trake-v1"
+TRAKE_V2_SCHEMA_VERSION = "trake-request-v2"
+SUPPORTED_SCHEMA_VERSIONS = {TRAKE_SCHEMA_VERSION, TRAKE_V2_SCHEMA_VERSION}
 SUPPORTED_GROUPS = {"L21"}
 SUPPORTED_MODALITIES = {"clip", "object", "attribute", "ocr", "asr", "metadata"}
 
@@ -51,12 +53,28 @@ class TrakeEvent:
     max_gap_seconds: float | None = None
     confidence: float = 1.0
     source: EventSource = EventSource.RULE
+    raw_text: str | None = None
+    visual_query: str | None = None
+    query_variants: tuple[str, ...] = ()
+    subject: str | None = None
+    action: str | None = None
+    location: str | None = None
+    ocr_terms: tuple[str, ...] = ()
+    asr_terms: tuple[str, ...] = ()
+    expected_gap_class: str | None = None
+    distinctiveness: float | None = None
+    planner_confidence: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "event_id", _text("event_id", self.event_id))
         object.__setattr__(self, "text", _text("text", self.text))
         object.__setattr__(self, "clip_query", _text("clip_query", self.clip_query))
         object.__setattr__(self, "modalities", tuple(dict.fromkeys(self.modalities)))
+        object.__setattr__(self, "raw_text", _text("raw_text", self.raw_text or self.text))
+        object.__setattr__(self, "visual_query", _text("visual_query", self.visual_query or self.clip_query))
+        object.__setattr__(self, "query_variants", tuple(dict.fromkeys(value.strip() for value in self.query_variants if value.strip())))
+        object.__setattr__(self, "ocr_terms", tuple(dict.fromkeys(value.strip() for value in self.ocr_terms if value.strip())))
+        object.__setattr__(self, "asr_terms", tuple(dict.fromkeys(value.strip() for value in self.asr_terms if value.strip())))
         if self.order < 1:
             raise ValueError("event order must start at 1")
         unsupported = set(self.modalities) - SUPPORTED_MODALITIES
@@ -64,6 +82,12 @@ class TrakeEvent:
             raise ValueError(f"unsupported modalities: {sorted(unsupported)}")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between 0 and 1")
+        if self.planner_confidence is not None and not 0.0 <= self.planner_confidence <= 1.0:
+            raise ValueError("planner_confidence must be between 0 and 1")
+        if self.distinctiveness is not None and not 0.0 <= self.distinctiveness <= 1.0:
+            raise ValueError("distinctiveness must be between 0 and 1")
+        if self.expected_gap_class not in {None, "short", "medium", "long", "unknown"}:
+            raise ValueError("expected_gap_class must be short, medium, long or unknown")
         for name, value in (("min_gap_seconds", self.min_gap_seconds), ("max_gap_seconds", self.max_gap_seconds)):
             if value is not None and value < 0:
                 raise ValueError(f"{name} must be non-negative")
@@ -80,12 +104,14 @@ class TrakeRequest:
     group: str = "L21"
     source_versions: dict[str, str] | None = None
     schema_version: str = TRAKE_SCHEMA_VERSION
+    global_context: str | None = None
+    planner_version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "query_id", _text("query_id", self.query_id))
         object.__setattr__(self, "original_query", _text("original_query", self.original_query))
         object.__setattr__(self, "events", tuple(self.events))
-        if self.schema_version != TRAKE_SCHEMA_VERSION:
+        if self.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError(f"unsupported TRAKE schema version: {self.schema_version}")
         if self.group not in SUPPORTED_GROUPS:
             raise ValueError(f"unsupported group: {self.group}")
@@ -111,7 +137,7 @@ class TrakeRequest:
 
 def event_from_dict(payload: dict[str, Any]) -> TrakeEvent:
     values = dict(payload)
-    for name in ("modalities", "object_constraints", "attribute_constraints", "ocr_constraints", "asr_constraints"):
+    for name in ("modalities", "object_constraints", "attribute_constraints", "ocr_constraints", "asr_constraints", "query_variants", "ocr_terms", "asr_terms"):
         if name in values:
             values[name] = tuple(values[name])
     if "source" in values:

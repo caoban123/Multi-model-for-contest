@@ -39,6 +39,7 @@ def main() -> int:
     parser.add_argument("--phase6-config", type=Path, default=ROOT / "configs" / "phase6_reranker_v1.json")
     parser.add_argument("--qa-store", type=Path, default=ROOT / "artifacts" / "qa" / "phase7_qa.sqlite3")
     parser.add_argument("--trake-store", type=Path, default=ROOT / "artifacts" / "trake" / "phase8_trake.sqlite3")
+    parser.add_argument("--trake-config", type=Path, default=ROOT / "configs" / "phase8_trake_v2.json")
     parser.add_argument("--groups", default="L21")
     parser.add_argument("--clip-model-id", default=os.environ.get("AIC_CLIP_MODEL_ID", DEFAULT_CLIP_MODEL_ID))
     parser.add_argument("--clip-cache-dir", type=Path, default=Path(os.environ["AIC_CLIP_CACHE_DIR"]) if os.environ.get("AIC_CLIP_CACHE_DIR") else None)
@@ -87,6 +88,7 @@ def main() -> int:
         trake_store_path=args.trake_store,
         trake_static_dir=ROOT / "web" / "trake_ui",
         trake_refinement_dir=ROOT / "artifacts" / "trake" / "refinement",
+        trake_config_path=args.trake_config,
     )
     try:
         server = run_server(config, host=args.host, port=args.port)

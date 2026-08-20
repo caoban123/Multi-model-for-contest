@@ -10,6 +10,7 @@ import numpy as np
 
 import aic_retrieval.retrieval_ui as retrieval_ui
 from aic_retrieval.retrieval_ui import RetrievalUiConfig
+from aic_retrieval.trake_workflow import TrakeDomainError
 
 
 def post(port: int, route: str, payload: dict[str, object]) -> dict[str, object]:
@@ -27,7 +28,10 @@ def test_trake_routes_are_separate_and_bad_session_is_http_400(tmp_path: Path, m
         def trake_search(self, session_id, *_args):
             if session_id == "missing": raise KeyError("unknown TRAKE session: missing")
             return {"state":{"session_id":session_id,"videos":[]}}
-        def trake_align(self, session_id, *_args): return {"state":{"session_id":session_id,"alignments":[]}}
+        def trake_align(self, session_id, *_args):
+            if session_id == "domain": raise TrakeDomainError("NO_FEASIBLE_VIDEO", "no feasible video", stage="TEMPORAL_FEASIBILITY_FAILURE")
+            if session_id == "boom": raise RuntimeError("private stack detail")
+            return {"state":{"session_id":session_id,"alignments":[]}}
         def trake_session(self, session_id): return {"state":{"session_id":session_id}}
         def trake_sessions(self): return {"sessions":[]}
     monkeypatch.setattr(retrieval_ui,"RetrievalUiService",FakeService)
@@ -41,7 +45,17 @@ def test_trake_routes_are_separate_and_bad_session_is_http_400(tmp_path: Path, m
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/trake/health") as response:
             assert json.load(response)["vlm_enabled"] is False
         try: post(port,"/api/trake/search",{"session_id":"missing"})
-        except urllib.error.HTTPError as exc: assert exc.code == 400
-        else: raise AssertionError("expected HTTP 400")
+        except urllib.error.HTTPError as exc: assert exc.code == 404
+        else: raise AssertionError("expected HTTP 404")
+        try: post(port,"/api/trake/align",{"session_id":"domain"})
+        except urllib.error.HTTPError as exc:
+            payload=json.load(exc)
+            assert exc.code == 422 and payload["code"] == "NO_FEASIBLE_VIDEO"
+            assert payload["error"] == "no feasible video"
+        else: raise AssertionError("expected HTTP 422")
+        try: post(port,"/api/trake/align",{"session_id":"boom"})
+        except urllib.error.HTTPError as exc:
+            payload=json.load(exc); assert exc.code == 500 and payload["error"] == "internal server error" and "private" not in json.dumps(payload)
+        else: raise AssertionError("expected HTTP 500")
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=2)

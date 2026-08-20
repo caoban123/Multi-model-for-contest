@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 
-STORE_VERSION = "phase8-trake-store-v1"
+STORE_VERSION = "phase8-trake-store-v2"
+READABLE_STORE_VERSIONS = {"phase8-trake-store-v1", STORE_VERSION}
 
 
 class TrakeStore:
@@ -17,6 +18,12 @@ class TrakeStore:
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
+            existing_row = connection.execute(
+                "SELECT value FROM metadata WHERE key='store_version'"
+            ).fetchone() if _table_exists(connection, "metadata") else None
+            existing_version = str(existing_row[0]) if existing_row else None
+            if existing_version is not None and existing_version not in READABLE_STORE_VERSIONS:
+                raise ValueError(f"unsupported TRAKE store version: {existing_version}")
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -53,10 +60,24 @@ class TrakeStore:
                 CREATE TABLE IF NOT EXISTS exports(
                   export_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, review_id TEXT NOT NULL,
                   created_at TEXT NOT NULL, payload_json TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS schema_migrations(
+                  migration_id TEXT PRIMARY KEY, from_version TEXT, to_version TEXT NOT NULL,
+                  applied_at TEXT NOT NULL, notes TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS idx_trake_reviews_session ON reviews(session_id,created_at);
                 CREATE INDEX IF NOT EXISTS idx_trake_exports_session ON exports(session_id,created_at);
                 """
             )
+            if existing_version is not None and existing_version != STORE_VERSION:
+                connection.execute(
+                    "INSERT OR IGNORE INTO schema_migrations VALUES(?,?,?,?,?)",
+                    (
+                        f"{existing_version}-to-{STORE_VERSION}",
+                        existing_version,
+                        STORE_VERSION,
+                        _now(),
+                        "Non-destructive metadata/state JSON compatibility migration; existing tables and records retained.",
+                    ),
+                )
             connection.execute("INSERT OR REPLACE INTO metadata VALUES('store_version',?)", (STORE_VERSION,))
 
     def connect(self) -> sqlite3.Connection:
@@ -90,7 +111,8 @@ class TrakeStore:
                 chains.append(state["manual_chain"])
             for chain in chains:
                 selection = "manual" if chain.get("manual", False) else "algorithm"
-                connection.execute("INSERT OR REPLACE INTO chains VALUES(?,?,?,?,?,?,?)", (state["session_id"], chain["chain_id"], chain["video_id"], int(chain["valid"]), chain["score"]["final_score"], selection, _dump(chain)))
+                persisted_score = (chain.get("score_components") or {}).get("final_rerank_score", chain["score"]["final_score"])
+                connection.execute("INSERT OR REPLACE INTO chains VALUES(?,?,?,?,?,?,?)", (state["session_id"], chain["chain_id"], chain["video_id"], int(chain["valid"]), persisted_score, selection, _dump(chain)))
                 for event in chain["events"]:
                     candidate = event.get("candidate")
                     connection.execute("INSERT OR REPLACE INTO chain_events VALUES(?,?,?,?,?,?)", (state["session_id"], chain["chain_id"], event["event_id"], candidate.get("candidate_id") if candidate else None, event.get("selection", selection), _dump(event)))
@@ -134,3 +156,7 @@ def _dump(value: Any) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
+    return connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None

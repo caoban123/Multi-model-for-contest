@@ -1,0 +1,126 @@
+{
+  "schema_version": "trake-v2",
+  "algorithm": "trake_v2",
+  "retrieval": {
+    "clip_enabled": true,
+    "siglip_enabled": false,
+    "object_enabled": true,
+    "attribute_enabled": true,
+    "ocr_enabled": false,
+    "asr_enabled": true,
+    "metadata_enabled": true,
+    "adaptive_topk": true,
+    "topk_min": 50,
+    "topk_default": 100,
+    "topk_max": 200,
+    "max_candidates_per_video_event": 12,
+    "adaptive_margin_low": 0.05,
+    "adaptive_margin_high": 0.20,
+    "generic_token_threshold": 3,
+    "text_embedding_cache_size": 2048
+  },
+  "fusion": {
+    "rrf_k": 60,
+    "weights": {}
+  },
+  "temporal": {
+    "allow_same_frame": false,
+    "fast_feasibility_filter": true,
+    "candidate_windows": true,
+    "max_candidate_videos": 30,
+    "max_windows_per_video": 5,
+    "max_total_windows": 50,
+    "alignment": "dante",
+    "legacy_alignment_enabled": true,
+    "top_chains_per_video": 5,
+    "beam_size": 100,
+    "sequence_default_max_gap_seconds": 60.0,
+    "min_alignment_seed_relative_score": 0.85
+  },
+  "refinement": {
+    "automatic": true,
+    "coarse_fps": 1.0,
+    "coarse_padding_sec": 3.0,
+    "fine_fps": 8.0,
+    "fine_padding_sec": 1.0,
+    "max_frames_per_window": 24,
+    "max_dense_windows": 1,
+    "max_refinement_shift_seconds": 10.0
+  },
+  "reranking": {
+    "context_enabled": true,
+    "linkage_enabled": true,
+    "weights": {
+      "semantic": 0.35,
+      "temporal": 0.25,
+      "linkage": 0.15,
+      "context": 0.15,
+      "multimodal": 0.05,
+      "coverage": 0.05
+    },
+    "multimodal_weights": {
+      "clip": 1.0,
+      "siglip": 1.0,
+      "object": 2.0,
+      "attribute": 2.0,
+      "ocr": 3.0,
+      "asr": 3.0,
+      "metadata": 1.0
+    },
+    "temporal_link_scale_seconds": 60.0,
+    "linkage_hard_gate": true,
+    "min_visual_continuity": 0.65
+  },
+  "distinctiveness": {
+    "margin_weight": 0.35,
+    "video_concentration_weight": 0.25,
+    "constraint_weight": 0.25,
+    "lexical_weight": 0.15
+  },
+  "dante": {
+    "semantic_weight": 1.0,
+    "transition_gap_penalty": 0.25,
+    "optional_skip_penalty": 0.15,
+    "coarse_top_k": 5,
+    "fine_top_k": 5,
+    "dense_candidates_per_event": 12
+  },
+  "vlm": {
+    "enabled": false,
+    "provider": null,
+    "model": null,
+    "network_calls_allowed": false,
+    "decision_log_approved": false,
+    "top_n": 3,
+    "low_confidence_margin": 0.05,
+    "low_linkage_threshold": 0.40
+  },
+  "benchmark": {
+    "development_config_frozen": false,
+    "holdout_tuning_forbidden": true
+  },
+  "features": {
+    "planner_v2": true,
+    "query_variants": true,
+    "second_visual_encoder": false,
+    "modality_routing": true,
+    "adaptive_topk": true,
+    "anchor": true,
+    "temporal_feasibility": true,
+    "candidate_windows": true,
+    "dante_coarse": true,
+    "dense_refinement": true,
+    "dante_fine": true,
+    "global_context": true,
+    "linkage": true,
+    "conditional_vlm": false
+  },
+  "legacy_scoring": {
+    "required_coverage_weight": 2.0,
+    "optional_coverage_weight": 0.5,
+    "evidence_weight": 0.03,
+    "preferred_gap_penalty": 0.25,
+    "optional_skip_penalty": 0.15,
+    "duplicate_penalty": 1.0
+  }
+}
