@@ -15,11 +15,16 @@ REVIEW_WARNING = "DECOMPOSITION_REVIEW_REQUIRED"
 PLANNER_LOW_CONFIDENCE = "PLANNER_LOW_CONFIDENCE"
 
 _FORWARD_CONNECTOR = re.compile(
-    r"\s*(?:→|\b(?:sau\s+đó|rồi|tiếp\s+theo|then|after\s+that|followed\s+by)\b)\s*",
+    r"\s*(?:→|->|\b(?:sau\s+đó|rồi|tiếp\s+theo|then|after\s+that|followed\s+by)\b)\s*",
     flags=re.IGNORECASE,
 )
 _BEFORE_CONNECTOR = re.compile(r"\s+\b(?:trước\s+khi|before)\b\s+", flags=re.IGNORECASE)
-_TEMPORAL_HINT = re.compile(r"→|\b(?:sau|trước|rồi|tiếp|then|after|before|followed)\b", flags=re.IGNORECASE)
+_TEMPORAL_HINT = re.compile(r"(?:→|->)|\b(?:sau|trước|rồi|tiếp|then|after|before|followed)\b", flags=re.IGNORECASE)
+# Numbered event lists are common in TRAKE prompts, e.g.
+# "Find four moments: (1) take-off, (2) flight, (3) landing, (4) stand up".
+# They are an explicit temporal declaration and take precedence over prose
+# connector heuristics so the introductory question is not treated as e1.
+_NUMBERED_EVENT = re.compile(r"(?:\(\s*(\d{1,2})\s*\)|(\d{1,2})[.)])\s*", flags=re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,22 @@ def _event(text: str, order: int, source: EventSource = EventSource.RULE) -> Tra
     return TrakeEvent(event_id=f"e{order}", order=order, text=text, clip_query=text, source=source)
 
 
+def _numbered_event_parts(value: str) -> list[str] | None:
+    """Return an explicit sequential numbered list, excluding its preamble."""
+    matches = list(_NUMBERED_EVENT.finditer(value))
+    if len(matches) < 2:
+        return None
+    numbers = [int(match.group(1) or match.group(2)) for match in matches]
+    if numbers != list(range(1, len(numbers) + 1)):
+        return None
+    parts = [
+        _clean(value[match.end(): matches[index + 1].start() if index + 1 < len(matches) else len(value)])
+        for index, match in enumerate(matches)
+    ]
+    parts = [part for part in parts if part]
+    return parts if len(parts) == len(matches) else None
+
+
 class RuleBasedTrakeDecomposer:
     """Split only explicit temporal connectors and flag ambiguous hints."""
 
@@ -46,16 +67,20 @@ class RuleBasedTrakeDecomposer:
             raise ValueError("original_query must not be empty")
         warnings: list[str] = []
 
-        forward_parts = [_clean(part) for part in _FORWARD_CONNECTOR.split(original)]
-        forward_parts = [part for part in forward_parts if part]
-        if len(forward_parts) > 1:
-            parts = forward_parts
+        numbered_parts = _numbered_event_parts(original)
+        if numbered_parts is not None:
+            parts = numbered_parts
         else:
-            before_parts = [_clean(part) for part in _BEFORE_CONNECTOR.split(original)]
-            before_parts = [part for part in before_parts if part]
-            parts = before_parts if len(before_parts) > 1 else [original]
-            if len(parts) == 1 and _TEMPORAL_HINT.search(original):
-                warnings.append(REVIEW_WARNING)
+            forward_parts = [_clean(part) for part in _FORWARD_CONNECTOR.split(original)]
+            forward_parts = [part for part in forward_parts if part]
+            if len(forward_parts) > 1:
+                parts = forward_parts
+            else:
+                before_parts = [_clean(part) for part in _BEFORE_CONNECTOR.split(original)]
+                before_parts = [part for part in before_parts if part]
+                parts = before_parts if len(before_parts) > 1 else [original]
+                if len(parts) == 1 and _TEMPORAL_HINT.search(original):
+                    warnings.append(REVIEW_WARNING)
 
         if len(parts) > 5:
             raise ValueError("TRAKE requires at most 5 events")

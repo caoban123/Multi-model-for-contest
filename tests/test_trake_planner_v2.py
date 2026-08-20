@@ -57,3 +57,28 @@ def test_explicit_sequence_uses_hard_default_gap_constraints() -> None:
     assert request.constraints["gap_mode"] == "hard"
     assert [event.max_gap_seconds for event in request.events] == [None, 60.0, 60.0]
     assert [event.expected_gap_class for event in request.events] == [None, "short", "short"]
+
+
+def test_ascii_arrow_splits_all_events_for_retrieval_and_alignment() -> None:
+    request = TrakePlannerV2(60.0).decompose(
+        "q",
+        "a male news anchor is reading the news -> a police officer is reading a sheet of paper -> a woman is sitting at a table and crying",
+    ).request
+
+    assert [event.text for event in request.events] == [
+        "a male news anchor is reading the news",
+        "a police officer is reading a sheet of paper",
+        "a woman is sitting at a table and crying",
+    ]
+    assert [event.max_gap_seconds for event in request.events] == [None, 60.0, 60.0]
+
+
+def test_numbered_vietnamese_moments_become_events_without_the_introductory_question() -> None:
+    request = TrakePlannerV2(60.0).decompose(
+        "q",
+        "Tìm 4 khoảnh khắc chính khi vận động viên thực hiện cú nhảy: (1) giậm nhảy, (2) bay qua xà, (3) tiếp đất, (4) đứng dậy.",
+    ).request
+
+    assert [event.text for event in request.events] == ["giậm nhảy", "bay qua xà", "tiếp đất", "đứng dậy"]
+    assert request.global_context is None
+    assert [event.max_gap_seconds for event in request.events] == [None, 60.0, 60.0, 60.0]
