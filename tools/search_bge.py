@@ -16,20 +16,25 @@ from aic_retrieval.retrievers import RetrievalRequest
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Search the opt-in L21 BGE index.")
+    parser = argparse.ArgumentParser(description="Search an opt-in BGE index.")
     parser.add_argument("query")
     parser.add_argument("--index-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_bge")
     parser.add_argument("--model-id", default=os.environ.get("AIC_BGE_MODEL_ID", "BAAI/bge-m3"))
     parser.add_argument("--model-path", default=os.environ.get("AIC_BGE_MODEL_PATH"))
     parser.add_argument("--cache-dir", type=Path, default=os.environ.get("AIC_BGE_CACHE_DIR"))
     parser.add_argument("--device", default=os.environ.get("AIC_BGE_DEVICE"))
+    parser.add_argument("--groups", help="Comma-separated groups; defaults to every group in the index manifest.")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--source-types", default="")
     args = parser.parse_args()
     encoder = BgeEncoder(args.model_id, model_path=args.model_path, cache_dir=args.cache_dir, local_files_only=True, device=args.device)
     retriever = BgeRetriever(ROOT, args.index_dir, encoder)
     source_types = tuple(item.strip() for item in args.source_types.split(",") if item.strip())
-    request = RetrievalRequest("cli", args.query, ("L21",), args.top_k, {"source_types": source_types} if source_types else {})
+    manifest_groups = retriever.manifest.get("groups") or [retriever.manifest.get("group") or "L21"]
+    groups = tuple(item.strip() for item in (args.groups or ",".join(manifest_groups)).split(",") if item.strip())
+    request = RetrievalRequest("cli", args.query, groups, args.top_k, {"source_types": source_types} if source_types else {})
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps({"health": retriever.health().to_dict(), "results": [item.to_dict() for item in retriever.search(request)]}, ensure_ascii=False, indent=2))
     return 0
 

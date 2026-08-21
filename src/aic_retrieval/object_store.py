@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from aic_retrieval.provenance import fingerprint_paths, sha256_file
 
@@ -111,46 +112,53 @@ def build_object_store(
     aliases_path: Path,
     output_path: Path,
     groups: set[str] | None = None,
+    progress: Callable[[int, int, int], None] | None = None,
 ) -> dict[str, Any]:
     refs = json.loads(refs_path.read_text(encoding="utf-8"))
     if groups:
         refs = [item for item in refs if str(item["group"]) in groups]
     aliases = load_alias_dictionary(aliases_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists():
-        output_path.unlink()
-    connection = sqlite3.connect(output_path)
-    connection.execute("PRAGMA journal_mode=OFF")
-    connection.execute("PRAGMA synchronous=OFF")
-    create_schema(connection)
+    building_path = output_path.with_suffix(output_path.suffix + ".building")
+    if building_path.exists():
+        building_path.unlink()
+    connection = sqlite3.connect(building_path)
     detection_count = available = invalid = 0
     object_paths: list[Path] = []
     insert_sql = """INSERT INTO detections(video_id,keyframe_id,label_id,label_raw,label_normalized,confidence,bbox_y1,bbox_x1,bbox_y2,bbox_x2,center_x,center_y,area,source,schema_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
-    for ref in refs:
-        video_id, keyframe_id = str(ref["video_id"]), int(ref["keyframe_id"])
-        path = object_root / video_id / f"{keyframe_id:03d}.json"
-        rows: list[tuple[Any, ...]] = []
-        source_valid = False
-        if path.exists():
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                rows = list(detection_rows(video_id, keyframe_id, payload, aliases))
-                object_paths.append(path)
-                available += 1
-                source_valid = True
-            except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
-                invalid += 1
-        # An empty but schema-valid file is still AVAILABLE and means no detections.
-        has_data = int(source_valid)
-        connection.execute("INSERT INTO frames VALUES (?,?,?,?,?,?)", (video_id, keyframe_id, int(ref["frame_idx"]), float(ref["pts_time"]), has_data, "AVAILABLE" if has_data else "UNKNOWN"))
-        if rows:
-            connection.executemany(insert_sql, rows)
-            detection_count += len(rows)
-    connection.commit()
-    integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
-    connection.close()
+    try:
+        connection.execute("PRAGMA journal_mode=OFF")
+        connection.execute("PRAGMA synchronous=OFF")
+        create_schema(connection)
+        for position, ref in enumerate(refs, 1):
+            video_id, keyframe_id = str(ref["video_id"]), int(ref["keyframe_id"])
+            path = object_root / video_id / f"{keyframe_id:03d}.json"
+            rows: list[tuple[Any, ...]] = []
+            source_valid = False
+            if path.exists():
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    rows = list(detection_rows(video_id, keyframe_id, payload, aliases))
+                    object_paths.append(path)
+                    available += 1
+                    source_valid = True
+                except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+                    invalid += 1
+            # An empty but schema-valid file is still AVAILABLE and means no detections.
+            has_data = int(source_valid)
+            connection.execute("INSERT INTO frames VALUES (?,?,?,?,?,?)", (video_id, keyframe_id, int(ref["frame_idx"]), float(ref["pts_time"]), has_data, "AVAILABLE" if has_data else "UNKNOWN"))
+            if rows:
+                connection.executemany(insert_sql, rows)
+                detection_count += len(rows)
+            if progress and (position % 1000 == 0 or position == len(refs)):
+                progress(position, len(refs), detection_count)
+        connection.commit()
+        integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        connection.close()
     video_count = len({str(item["video_id"]) for item in refs})
     source_fingerprint = fingerprint_paths([refs_path, aliases_path, *object_paths])
+    os.replace(building_path, output_path)
     return {
         "schema_version": OBJECT_SCHEMA_VERSION,
         "build_timestamp": datetime.now(timezone.utc).isoformat(),

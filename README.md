@@ -1,6 +1,6 @@
 # Multi-model for AIC Video Retrieval
 
-## Current Snapshot - 2026-08-20
+## Current Snapshot - 2026-08-21
 
 > Read this section first. Older sections below are retained as historical phase notes and may describe earlier limitations.
 
@@ -9,7 +9,7 @@ The repository now contains a working L21-focused video retrieval system with CL
 Latest comprehensive report:
 
 ```text
-reports/Phase_9_20-08-2026_12.md
+reports/Phase_9_21-08-2026_7.md
 ```
 
 High-level status:
@@ -21,7 +21,7 @@ High-level status:
 | Retrieval UI | Implemented | Visual search, metadata search, Agent workspace, pins, history, raw video preview, keyframe neighborhood viewer. |
 | Agent query routing | Implemented, opt-in | Separate CLIP-English, BGE semantic and BM25 lexical queries with raw/parsed/validated Gemini trace and local fallback. |
 | Structured retrieval | Implemented, opt-in | CLIP + objects + metadata + attributes + OCR/ASR via `/api/structured-search`. |
-| Object store | Built for L21 | `artifacts/structured/l21_objects.sqlite`, 7,800 frames, 780,000 detections. Raw labels live in `detection_class_entities`. |
+| Object store | Built and audited | L21 remains local; full L21-L30 is at `E:\AIC2026\artifacts\structured\l21_l30_objects.sqlite` with 177,321 frames and 17,732,100 detections. |
 | Attribute/color evidence | Implemented | Useful for constraints such as red shirt or white car. |
 | Phase 5 ASR/OCR | Partially useful | ASR has 563 transcript segments. OCR JSONL exists but current detections are empty. |
 | Phase 6 reranker/planner | Implemented | Local query planner/reranker config exists at `configs/phase6_reranker_v1.json`. |
@@ -30,7 +30,14 @@ High-level status:
 | Phase 8 TRAKE | Implementation complete; quality pending | Local plan/retrieve/temporal-align, `/trake` workspace, SQLite review, internal export and selected-event refinement exist; manual development/holdout labels are pending. |
 | Phase 9 submission workflow | Implemented, guarded | `/submission` has rich Agent candidate cards, Gemini trace, SQLite queue, official KIS/Q&A/TRAKE CSV, validation and `submission.zip`. Official frame IDs require manual/BTC-certified mapping. |
 | FAISS/vector DB | Implemented, opt-in | BGE-M3 FAISS index covers 8,322 L21 text documents; it does not replace the CLIP NumPy baseline. |
-| BM25 | Implemented, opt-in | SQLite FTS5 index covers the same 8,322-document L21 corpus. |
+| BM25 | Implemented, opt-in | L21 remains local; full L21-L30 FTS5 index on E covers 173,393 documents and has passed integrity/search audits. |
+
+Full-data staging status:
+
+- L21-L30 are normalized under `E:\AIC2026\data` and exposed through the `D:\AIC1\data` Junction.
+- The full registry covers 873 videos and 177,321 aligned CLIP/mapping/keyframe/object frames with zero validation errors.
+- Full CLIP NumPy is ready and audited at `E:\AIC2026\artifacts\indexes\l21_l30_numpy`; the old L21-only index remains stale against the newly downloaded feature source.
+- Full object SQLite, 173,393-document text corpus and BM25 index are built and independently audited. Full BGE/FAISS is pending with a resumable checkpoint builder. Large full-data artifacts belong under `E:\AIC2026\artifacts`; see `reports/Phase_9_21-08-2026_7.md` for the next command.
 
 Current important local artifacts:
 
@@ -83,7 +90,7 @@ Current test status:
 
 ```text
 python -m pytest -q
-340 passed
+348 passed
 ```
 
 Known limitations:

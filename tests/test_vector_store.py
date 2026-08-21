@@ -22,6 +22,18 @@ def test_faiss_vector_store_build_save_load_search(tmp_path: Path) -> None:
     assert results[0].score == pytest.approx(1.0)
 
 
+def test_batched_build_matches_regular_build() -> None:
+    vectors = np.asarray([[2, 0], [0, 3], [1, 1], [-2, 1]], dtype=np.float32)
+    regular = FaissVectorStore.build(vectors)
+    batched = FaissVectorStore.build_batched(vectors, batch_size=2)
+
+    regular_results = regular.search(np.asarray([1, 0], dtype=np.float32), 4)
+    batched_results = batched.search(np.asarray([1, 0], dtype=np.float32), 4)
+
+    assert [item.position for item in batched_results] == [item.position for item in regular_results]
+    assert [item.score for item in batched_results] == pytest.approx([item.score for item in regular_results])
+
+
 @pytest.mark.parametrize(
     "vectors",
     [

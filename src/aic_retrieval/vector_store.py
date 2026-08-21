@@ -44,6 +44,24 @@ class FaissVectorStore:
         return cls(index)
 
     @classmethod
+    def build_batched(cls, vectors: np.ndarray, batch_size: int = 4096) -> "FaissVectorStore":
+        matrix = np.asarray(vectors)
+        if matrix.ndim != 2 or not matrix.shape[0] or not matrix.shape[1]:
+            raise ValueError("vectors must be a non-empty 2-D matrix")
+        if batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        index = faiss.IndexFlatIP(matrix.shape[1])
+        for start in range(0, matrix.shape[0], batch_size):
+            batch = np.asarray(matrix[start : start + batch_size], dtype=np.float32)
+            if not np.isfinite(batch).all():
+                raise ValueError("vectors must contain only finite values")
+            norms = np.linalg.norm(batch, axis=1, keepdims=True)
+            if np.any(norms == 0):
+                raise ValueError("vectors must not contain zero rows")
+            index.add(np.ascontiguousarray(batch / norms, dtype=np.float32))
+        return cls(index)
+
+    @classmethod
     def load(cls, path: Path) -> "FaissVectorStore":
         if not path.is_file():
             raise FileNotFoundError(path)

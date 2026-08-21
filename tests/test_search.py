@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -324,6 +326,42 @@ def test_non_l21_result_keeps_mapping_without_image(tmp_path) -> None:
 
     assert (result.video_id, result.keyframe_id, result.frame_idx, result.pts_time) == ("L22_V001", 7, 31, 1.25)
     assert result.keyframe_path is None
+
+
+def test_build_index_keeps_external_keyframe_path_when_data_is_outside_repo(tmp_path) -> None:
+    repo_root = tmp_path / "repo"
+    external_data = tmp_path / "external-data"
+    feature_dir = external_data / "clip-features-32"
+    mapping_dir = external_data / "map-keyframes"
+    keyframe_dir = external_data / "keyframes" / "L21_V001"
+    feature_dir.mkdir(parents=True)
+    mapping_dir.mkdir(parents=True)
+    keyframe_dir.mkdir(parents=True)
+    repo_root.mkdir()
+    np.save(feature_dir / "L21_V001.npy", np.array([[1.0, 0.0]], dtype=np.float16))
+    (mapping_dir / "L21_V001.csv").write_text(
+        "n,pts_time,fps,frame_idx\n1,0,30,0\n",
+        encoding="utf-8",
+    )
+    image = keyframe_dir / "001.jpg"
+    image.write_bytes(b"image")
+    registry = {
+        "videos": [
+            {
+                "video_id": "L21_V001",
+                "group": "L21",
+                "clip_feature_path": str(feature_dir / "L21_V001.npy"),
+                "mapping_path": str(mapping_dir / "L21_V001.csv"),
+                "keyframe_path": str(keyframe_dir),
+                "has_keyframe_images": True,
+            }
+        ]
+    }
+    from aic_retrieval.search import build_numpy_index
+
+    _, refs = build_numpy_index(registry, repo_root, groups={"L21"}, require_keyframes=True)
+
+    assert Path(str(refs[0].keyframe_path)) == image.resolve()
 
 
 def _result(rank: int, video_id: str, keyframe_id: int, score: float):

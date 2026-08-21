@@ -40,9 +40,16 @@ def _write_object_store(root: Path) -> None:
         "CREATE TABLE detections(video_id TEXT,keyframe_id INTEGER,label_normalized TEXT,confidence REAL);"
     )
     connection.execute("INSERT INTO frames VALUES('L21_V001',1,25,1.0)")
+    connection.execute("INSERT INTO frames VALUES('L21_V001',2,50,2.0)")
     connection.executemany(
         "INSERT INTO detections VALUES(?,?,?,?)",
-        [("L21_V001", 1, "person", 0.9), ("L21_V001", 1, "person", 0.7), ("L21_V001", 1, "phone", 0.8), ("L21_V001", 1, "noise", 0.1)],
+        [
+            ("L21_V001", 1, "person", 0.9),
+            ("L21_V001", 1, "person", 0.7),
+            ("L21_V001", 1, "phone", 0.8),
+            ("L21_V001", 1, "noise", 0.1),
+            ("L21_V001", 2, "vehicle", 0.85),
+        ],
     )
     connection.commit()
     connection.close()
@@ -65,14 +72,15 @@ def test_text_corpus_is_deterministic_and_aggregates_object_labels(tmp_path: Pat
     assert first_manifest["corpus_sha256"] == second_manifest["corpus_sha256"]
     assert first_manifest["input_fingerprint"] == second_manifest["input_fingerprint"]
     assert second_manifest["audit_source_fingerprint"] == "source-v1"
-    assert first_manifest["source_counts"] == {"metadata": 3, "asr": 1, "ocr": 0, "object": 1}
+    assert first_manifest["source_counts"] == {"metadata": 3, "asr": 1, "ocr": 0, "object": 2}
     assert first_manifest["warnings"] == ["OCR contributed 0 documents"]
     object_document = next(item for item in first if item.source_type == "object")
     assert object_document.text == "person, phone"
     assert object_document.provenance["labels"] == [{"label": "person", "confidence": 0.9}, {"label": "phone", "confidence": 0.8}]
+    assert [item.text for item in first if item.source_type == "object"] == ["person, phone", "vehicle"]
 
     result = write_text_corpus(first, first_manifest, tmp_path / "output")
-    assert result["document_count"] == 5
+    assert result["document_count"] == 6
     assert result["corpus_sha256"] == first_manifest["corpus_sha256"]
 
 
@@ -85,3 +93,34 @@ def test_text_corpus_skips_missing_optional_stores_with_warning(tmp_path: Path) 
     assert len(documents) == 3
     assert manifest["status"] == "READY_WITH_WARNINGS"
     assert len(manifest["warnings"]) == 2
+
+
+def test_text_corpus_combines_multiple_groups(tmp_path: Path) -> None:
+    registry = tmp_path / "artifacts" / "registry" / "data_registry.json"
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        json.dumps(
+            {
+                "videos": [
+                    {"video_id": "L21_V001", "group": "L21"},
+                    {"video_id": "L22_V001", "group": "L22"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    for video_id in ("L21_V001", "L22_V001"):
+        path = tmp_path / "data" / "media-info" / f"{video_id}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"title": f"Title {video_id}"}), encoding="utf-8")
+
+    documents, manifest = build_text_corpus(
+        tmp_path,
+        CorpusBuildConfig(groups=("L22", "L21")),
+        phase5_store_path=tmp_path / "missing-phase5.sqlite",
+        object_store_path=tmp_path / "missing-objects.sqlite",
+    )
+
+    assert manifest["group"] is None
+    assert manifest["groups"] == ["L21", "L22"]
+    assert {item.video_id for item in documents} == {"L21_V001", "L22_V001"}

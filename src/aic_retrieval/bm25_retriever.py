@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import sqlite3
@@ -8,7 +9,7 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from aic_retrieval.hybrid_audit import sha256_file
 from aic_retrieval.phase5_schema import normalize_text
@@ -21,8 +22,7 @@ VIETNAMESE_DATE_PATTERN = re.compile(r"\bngay\s+(\d{1,2})\s+thang\s+(\d{1,2})\s+
 NUMERIC_DATE_PATTERN = re.compile(r"\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b")
 
 
-def _load_documents(path: Path) -> list[dict[str, Any]]:
-    documents: list[dict[str, Any]] = []
+def _iter_documents(path: Path) -> Iterator[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, 1):
             if not line.strip():
@@ -31,11 +31,7 @@ def _load_documents(path: Path) -> list[dict[str, Any]]:
             required = ("document_id", "source_type", "video_id", "text", "text_normalized", "text_folded")
             if not isinstance(payload, dict) or any(not str(payload.get(key, "")).strip() for key in required):
                 raise ValueError(f"invalid corpus document at line {line_number}")
-            documents.append(payload)
-    ids = [str(item["document_id"]) for item in documents]
-    if not documents or len(ids) != len(set(ids)):
-        raise ValueError("corpus must contain unique non-empty document IDs")
-    return documents
+            yield payload
 
 
 def _portable_path(path: Path, root: Path) -> str:
@@ -73,22 +69,30 @@ def build_bm25_index(
     corpus_path: Path,
     corpus_manifest_path: Path,
     output_dir: Path,
+    progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    documents = _load_documents(corpus_path)
     corpus_manifest = json.loads(corpus_manifest_path.read_text(encoding="utf-8"))
     corpus_checksum = sha256_file(corpus_path)
     if corpus_checksum != corpus_manifest.get("corpus_sha256"):
         raise ValueError("corpus checksum does not match its manifest")
-    if len(documents) != int(corpus_manifest.get("document_count", -1)):
-        raise ValueError("corpus document count does not match its manifest")
+    expected_count = int(corpus_manifest.get("document_count", -1))
+    if expected_count < 1:
+        raise ValueError("corpus manifest must contain a positive document count")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     database_path = output_dir / "documents.sqlite3"
     manifest_path = output_dir / "manifest.json"
-    database_path.unlink(missing_ok=True)
+    building_path = database_path.with_suffix(database_path.suffix + ".building")
+    manifest_building_path = manifest_path.with_suffix(manifest_path.suffix + ".building")
+    building_path.unlink(missing_ok=True)
+    manifest_building_path.unlink(missing_ok=True)
 
-    connection = sqlite3.connect(database_path)
+    source_counts: Counter[str] = Counter()
+    source_videos: dict[str, set[str]] = {}
+    seen_document_ids: set[str] = set()
+    document_count = 0
+    connection = sqlite3.connect(building_path)
     try:
         connection.executescript(
             """
@@ -119,51 +123,69 @@ def build_bm25_index(
             );
             """
         )
-        rows = [
-            (
-                position,
-                document["document_id"],
-                document["source_type"],
-                document["video_id"],
-                document["text"],
-                document["text_normalized"],
-                document["text_folded"],
-                document.get("keyframe_id"),
-                document.get("frame_idx"),
-                document.get("pts_time"),
-                document.get("source_field"),
-                json.dumps(document.get("provenance", {}), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-            )
-            for position, document in enumerate(documents, 1)
-        ]
-        connection.executemany(
-            """
+        insert_sql = """
             INSERT INTO documents(
                 rowid,document_id,source_type,video_id,text,text_normalized,text_folded,
                 keyframe_id,frame_idx,pts_time,source_field,provenance_json
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            rows,
-        )
+        """
+        rows: list[tuple[Any, ...]] = []
+        for position, document in enumerate(_iter_documents(corpus_path), 1):
+            document_id = str(document["document_id"])
+            if document_id in seen_document_ids:
+                raise ValueError(f"duplicate corpus document ID: {document_id}")
+            seen_document_ids.add(document_id)
+            source_type = str(document["source_type"])
+            video_id = str(document["video_id"])
+            source_counts[source_type] += 1
+            source_videos.setdefault(source_type, set()).add(video_id)
+            rows.append(
+                (
+                    position,
+                    document_id,
+                    source_type,
+                    video_id,
+                    document["text"],
+                    document["text_normalized"],
+                    document["text_folded"],
+                    document.get("keyframe_id"),
+                    document.get("frame_idx"),
+                    document.get("pts_time"),
+                    document.get("source_field"),
+                    json.dumps(document.get("provenance", {}), ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                )
+            )
+            if len(rows) == 1000:
+                connection.executemany(insert_sql, rows)
+                document_count += len(rows)
+                rows.clear()
+                if progress:
+                    progress(document_count, expected_count)
+        if rows:
+            connection.executemany(insert_sql, rows)
+            document_count += len(rows)
+            if progress:
+                progress(document_count, expected_count)
+        if document_count != expected_count:
+            raise ValueError("corpus document count does not match its manifest")
         connection.execute("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')")
         connection.commit()
         integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
         fts_count = int(connection.execute("SELECT COUNT(*) FROM documents_fts").fetchone()[0])
-        if integrity != "ok" or fts_count != len(documents):
+        if integrity != "ok" or fts_count != document_count:
             raise ValueError(f"BM25 index validation failed: integrity={integrity}, fts_count={fts_count}")
         connection.execute("VACUUM")
     finally:
         connection.close()
 
-    source_counts = Counter(str(item["source_type"]) for item in documents)
-    source_videos: dict[str, set[str]] = {}
-    for document in documents:
-        source_videos.setdefault(str(document["source_type"]), set()).add(str(document["video_id"]))
+    database_checksum = sha256_file(building_path)
+    database_size = building_path.stat().st_size
     expected_sources = ("metadata", "asr", "ocr", "object")
     manifest = {
         "schema_version": BM25_INDEX_SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "group": corpus_manifest.get("group"),
+        "groups": corpus_manifest.get("groups") or ([corpus_manifest["group"]] if corpus_manifest.get("group") else []),
         "engine": {
             "name": "SQLite FTS5 BM25",
             "sqlite_version": sqlite3.sqlite_version,
@@ -176,15 +198,15 @@ def build_bm25_index(
             "manifest_path": _portable_path(corpus_manifest_path, root),
             "sha256": corpus_checksum,
             "input_fingerprint": corpus_manifest.get("input_fingerprint"),
-            "document_count": len(documents),
+            "document_count": document_count,
             "source_counts": {source: source_counts[source] for source in expected_sources},
             "source_video_counts": {source: len(source_videos.get(source, set())) for source in expected_sources},
         },
         "database": {
             "path": _portable_path(database_path, root),
-            "sha256": sha256_file(database_path),
-            "size_bytes": database_path.stat().st_size,
-            "document_count": len(documents),
+            "sha256": database_checksum,
+            "size_bytes": database_size,
+            "document_count": document_count,
             "fts_document_count": fts_count,
             "integrity_check": integrity,
         },
@@ -192,7 +214,9 @@ def build_bm25_index(
         "machine": {"platform": platform.platform(), "python": platform.python_version()},
         "status": "READY",
     }
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_building_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(building_path, database_path)
+    os.replace(manifest_building_path, manifest_path)
     return manifest
 
 
@@ -252,12 +276,19 @@ class Bm25Retriever:
         )
 
     def search(self, request: RetrievalRequest) -> list[RetrievalHit]:
-        if str(self.manifest.get("group", "")) not in request.groups:
+        index_groups = {str(item) for item in self.manifest.get("groups", ()) if str(item)}
+        if not index_groups and self.manifest.get("group"):
+            index_groups = {str(self.manifest["group"])}
+        active_groups = index_groups.intersection(request.groups)
+        if not active_groups:
             return []
         source_filter = tuple(sorted({str(item) for item in request.filters.get("source_types", ())}))
         video_filter = tuple(sorted({str(item) for item in request.filters.get("video_ids", ())}))
         conditions = ["documents_fts MATCH ?"]
         parameters: list[Any] = [_fts_query(request.query_text)]
+        if active_groups != index_groups:
+            conditions.append(f"({' OR '.join('d.video_id LIKE ?' for _ in active_groups)})")
+            parameters.extend(f"{group}_%" for group in sorted(active_groups))
         if source_filter:
             conditions.append(f"d.source_type IN ({','.join('?' for _ in source_filter)})")
             parameters.extend(source_filter)

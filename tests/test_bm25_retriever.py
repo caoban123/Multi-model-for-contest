@@ -72,14 +72,19 @@ def test_fts_query_normalizes_and_folds_vietnamese() -> None:
 def test_build_search_filter_and_health(tmp_path: Path) -> None:
     corpus_path, manifest_path = _write_corpus(tmp_path)
     output_dir = tmp_path / "artifacts" / "indexes" / "fixture_bm25"
+    progress: list[tuple[int, int]] = []
     manifest = build_bm25_index(
         root=tmp_path,
         corpus_path=corpus_path,
         corpus_manifest_path=manifest_path,
         output_dir=output_dir,
+        progress=lambda processed, total: progress.append((processed, total)),
     )
     assert manifest["database"]["integrity_check"] == "ok"
     assert manifest["database"]["document_count"] == 2
+    assert progress == [(2, 2)]
+    assert not (output_dir / "documents.sqlite3.building").exists()
+    assert not (output_dir / "manifest.json.building").exists()
 
     retriever = Bm25Retriever(tmp_path, output_dir)
     hits = retriever.search(RetrievalRequest("q1", "ghep tang", top_k=5))
@@ -104,3 +109,78 @@ def test_retriever_rejects_corrupted_database(tmp_path: Path) -> None:
         stream.write(b"corrupt")
     with pytest.raises(ValueError, match="corrupted"):
         Bm25Retriever(tmp_path, output_dir)
+
+
+def test_bm25_multigroup_index_filters_requested_group(tmp_path: Path) -> None:
+    corpus_path, manifest_path = _write_corpus(tmp_path)
+    documents = [
+        json.loads(line)
+        for line in corpus_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    documents.append({**documents[1], "document_id": "asr:l22", "video_id": "L22_V001"})
+    payload = "".join(
+        json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        for item in documents
+    )
+    corpus_path.write_text(payload, encoding="utf-8", newline="\n")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(
+        {
+            "group": None,
+            "groups": ["L21", "L22"],
+            "document_count": 3,
+            "corpus_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    output_dir = tmp_path / "artifacts" / "indexes" / "multi_bm25"
+    build_bm25_index(
+        root=tmp_path,
+        corpus_path=corpus_path,
+        corpus_manifest_path=manifest_path,
+        output_dir=output_dir,
+    )
+
+    hits = Bm25Retriever(tmp_path, output_dir).search(
+        RetrievalRequest("q1", "ghep tang", groups=("L22",), top_k=5)
+    )
+
+    assert [hit.video_id for hit in hits] == ["L22_V001"]
+
+
+def test_failed_rebuild_preserves_published_index(tmp_path: Path) -> None:
+    corpus_path, manifest_path = _write_corpus(tmp_path)
+    output_dir = tmp_path / "index"
+    build_bm25_index(
+        root=tmp_path,
+        corpus_path=corpus_path,
+        corpus_manifest_path=manifest_path,
+        output_dir=output_dir,
+    )
+    database_path = output_dir / "documents.sqlite3"
+    index_manifest_path = output_dir / "manifest.json"
+    published_database = hashlib.sha256(database_path.read_bytes()).hexdigest()
+    published_manifest = index_manifest_path.read_bytes()
+
+    documents = [json.loads(line) for line in corpus_path.read_text(encoding="utf-8").splitlines()]
+    documents[1]["document_id"] = documents[0]["document_id"]
+    payload = "".join(
+        json.dumps(item, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+        for item in documents
+    )
+    corpus_path.write_text(payload, encoding="utf-8", newline="\n")
+    corpus_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    corpus_manifest["corpus_sha256"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    manifest_path.write_text(json.dumps(corpus_manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate corpus document ID"):
+        build_bm25_index(
+            root=tmp_path,
+            corpus_path=corpus_path,
+            corpus_manifest_path=manifest_path,
+            output_dir=output_dir,
+        )
+
+    assert hashlib.sha256(database_path.read_bytes()).hexdigest() == published_database
+    assert index_manifest_path.read_bytes() == published_manifest

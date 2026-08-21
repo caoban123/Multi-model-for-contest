@@ -974,12 +974,7 @@ class RetrievalUiService:
     def resolve_keyframe_path(self, value: str) -> Path:
         if not value:
             raise FileNotFoundError("empty keyframe path")
-        path = (self.config.repo_root / value).resolve()
-        repo_root = self.config.repo_root.resolve()
-        try:
-            path.relative_to(repo_root)
-        except ValueError as exc:
-            raise PermissionError("keyframe path is outside the repository") from exc
+        path = self._resolve_media_path(value)
         if not path.is_file():
             raise FileNotFoundError(value)
         return path
@@ -991,15 +986,27 @@ class RetrievalUiService:
         asset = self.assets_by_video.get(video_id)
         if not asset or not asset.get("video_path"):
             raise FileNotFoundError(video_id)
-        path = (self.config.repo_root / asset["video_path"]).resolve()
-        repo_root = self.config.repo_root.resolve()
-        try:
-            path.relative_to(repo_root)
-        except ValueError as exc:
-            raise PermissionError("video path is outside the repository") from exc
+        path = self._resolve_media_path(str(asset["video_path"]))
         if not path.is_file():
             raise FileNotFoundError(video_id)
         return path
+
+    def _resolve_media_path(self, value: str) -> Path:
+        raw_path = Path(value)
+        path = (raw_path if raw_path.is_absolute() else self.config.repo_root / raw_path).resolve()
+        registry = getattr(self, "registry", {})
+        raw_data_root = Path(str(registry.get("data_root") or "data"))
+        data_root = (
+            raw_data_root if raw_data_root.is_absolute() else self.config.repo_root / raw_data_root
+        ).resolve()
+        allowed_roots = (self.config.repo_root.resolve(), data_root)
+        for allowed_root in allowed_roots:
+            try:
+                path.relative_to(allowed_root)
+                return path
+            except ValueError:
+                continue
+        raise PermissionError("media path is outside the repository and configured data root")
 
     def _encoder(self) -> ClipTextEncoder:
         if self.encoder is None:

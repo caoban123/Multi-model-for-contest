@@ -501,7 +501,16 @@ def _repo_path(repo_root: Path, value: str | None) -> Path | None:
 
 
 def _relative(path: Path, root: Path) -> str:
-    return str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+    absolute_path = path.absolute()
+    absolute_root = root.absolute()
+    try:
+        return str(absolute_path.relative_to(absolute_root)).replace("\\", "/")
+    except ValueError:
+        resolved_path = path.resolve()
+        try:
+            return str(resolved_path.relative_to(root.resolve())).replace("\\", "/")
+        except ValueError:
+            return str(resolved_path).replace("\\", "/")
 
 
 def _rerank_frame(result: SearchResult, rank: int) -> SearchResult:

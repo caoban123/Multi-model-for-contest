@@ -58,14 +58,22 @@ class CorpusBuildConfig:
     group: str = "L21"
     object_min_confidence: float = 0.3
     object_max_labels_per_frame: int = 20
+    groups: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.group.strip():
+        if not self.groups and not self.group.strip():
             raise ValueError("group must not be empty")
+        if any(not group.strip() for group in self.groups):
+            raise ValueError("groups must contain non-empty values")
         if not 0 <= self.object_min_confidence <= 1:
             raise ValueError("object_min_confidence must be between 0 and 1")
         if self.object_max_labels_per_frame < 1:
             raise ValueError("object_max_labels_per_frame must be positive")
+
+    @property
+    def selected_groups(self) -> tuple[str, ...]:
+        values = self.groups or (self.group,)
+        return tuple(sorted({group.strip() for group in values}))
 
 
 def _canonical_json(payload: Any) -> str:
@@ -211,31 +219,47 @@ def _object_documents(path: Path, config: CorpusBuildConfig) -> Iterator[TextDoc
         GROUP BY d.video_id,d.keyframe_id,f.frame_idx,f.pts_time,d.label_normalized
         ORDER BY d.video_id,d.keyframe_id,max_confidence DESC,d.label_normalized
     """
-    grouped: dict[tuple[str, int, int, float], list[dict[str, Any]]] = defaultdict(list)
     with _open_sqlite_readonly(path) as connection:
-        for row in connection.execute(query, (f"{config.group}_%", config.object_min_confidence)):
-            key = (str(row["video_id"]), int(row["keyframe_id"]), int(row["frame_idx"]), float(row["pts_time"]))
-            if len(grouped[key]) < config.object_max_labels_per_frame:
-                grouped[key].append({"label": str(row["label_normalized"]), "confidence": round(float(row["max_confidence"]), 6)})
-    for (video_id, keyframe_id, frame_idx, pts_time), labels in sorted(grouped.items()):
-        text = ", ".join(item["label"] for item in labels)
-        document = _make_document(
-            source_type="object",
-            video_id=video_id,
-            text=text,
-            identity={"video_id": video_id, "keyframe_id": keyframe_id, "aggregation": "max_confidence_distinct_labels"},
-            keyframe_id=keyframe_id,
-            frame_idx=frame_idx,
-            pts_time=pts_time,
-            source_field="aggregated_labels",
-            provenance={
-                "labels": labels,
-                "min_confidence": config.object_min_confidence,
-                "max_labels": config.object_max_labels_per_frame,
-            },
-        )
-        if document:
-            yield document
+        for group in config.selected_groups:
+            current_key: tuple[str, int, int, float] | None = None
+            labels: list[dict[str, Any]] = []
+            for row in connection.execute(query, (f"{group}_%", config.object_min_confidence)):
+                key = (str(row["video_id"]), int(row["keyframe_id"]), int(row["frame_idx"]), float(row["pts_time"]))
+                if current_key is not None and key != current_key:
+                    document = _make_object_document(current_key, labels, config)
+                    if document:
+                        yield document
+                    labels = []
+                current_key = key
+                if len(labels) < config.object_max_labels_per_frame:
+                    labels.append({"label": str(row["label_normalized"]), "confidence": round(float(row["max_confidence"]), 6)})
+            if current_key is not None:
+                document = _make_object_document(current_key, labels, config)
+                if document:
+                    yield document
+
+
+def _make_object_document(
+    key: tuple[str, int, int, float],
+    labels: list[dict[str, Any]],
+    config: CorpusBuildConfig,
+) -> TextDocument | None:
+    video_id, keyframe_id, frame_idx, pts_time = key
+    return _make_document(
+        source_type="object",
+        video_id=video_id,
+        text=", ".join(item["label"] for item in labels),
+        identity={"video_id": video_id, "keyframe_id": keyframe_id, "aggregation": "max_confidence_distinct_labels"},
+        keyframe_id=keyframe_id,
+        frame_idx=frame_idx,
+        pts_time=pts_time,
+        source_field="aggregated_labels",
+        provenance={
+            "labels": labels,
+            "min_confidence": config.object_min_confidence,
+            "max_labels": config.object_max_labels_per_frame,
+        },
+    )
 
 
 def _fingerprint_paths(paths: Iterable[Path], root: Path) -> tuple[str, list[dict[str, Any]]]:
@@ -271,21 +295,21 @@ def build_text_corpus(
         raise FileNotFoundError(registry_path)
 
     registry = json.loads(registry_path.read_text(encoding="utf-8"))
-    videos = [item for item in registry.get("videos", []) if str(item.get("group")) == config.group]
+    selected_groups = config.selected_groups
+    videos = [item for item in registry.get("videos", []) if str(item.get("group")) in selected_groups]
     video_ids = sorted({str(item["video_id"]) for item in videos})
     warnings: list[str] = []
     if not video_ids:
-        raise ValueError(f"registry has no videos for group {config.group}")
+        raise ValueError(f"registry has no videos for groups {selected_groups}")
     if not phase5_store_path.is_file():
         warnings.append("Phase 5 store is missing; OCR/ASR documents were skipped")
     if not object_store_path.is_file():
         warnings.append("Object store is missing; object documents were skipped")
 
-    documents = [
-        *_metadata_documents(data_root, video_ids),
-        *_phase5_documents(phase5_store_path, config.group),
-        *_object_documents(object_store_path, config),
-    ]
+    documents = list(_metadata_documents(data_root, video_ids))
+    for group in selected_groups:
+        documents.extend(_phase5_documents(phase5_store_path, group))
+    documents.extend(_object_documents(object_store_path, config))
     documents.sort(
         key=lambda item: (
             item.source_type,
@@ -327,7 +351,8 @@ def build_text_corpus(
     manifest = {
         "schema_version": CORPUS_SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "group": config.group,
+        "group": selected_groups[0] if len(selected_groups) == 1 else None,
+        "groups": list(selected_groups),
         "config": asdict(config),
         "input_fingerprint": input_fingerprint,
         "audit_source_fingerprint": audit_source_fingerprint,

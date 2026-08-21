@@ -15,9 +15,10 @@ from aic_retrieval.retrievers import RetrievalRequest
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Search the opt-in L21 BM25 index.")
+    parser = argparse.ArgumentParser(description="Search an opt-in BM25 index.")
     parser.add_argument("query")
     parser.add_argument("--index-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_bm25")
+    parser.add_argument("--groups", help="Comma-separated groups; defaults to every group in the index manifest.")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--source", action="append", dest="sources")
     parser.add_argument("--video", action="append", dest="videos")
@@ -28,7 +29,11 @@ def main() -> int:
     if args.videos:
         filters["video_ids"] = tuple(args.videos)
     retriever = Bm25Retriever(ROOT, args.index_dir)
-    hits = retriever.search(RetrievalRequest("cli", args.query, top_k=args.top_k, filters=filters))
+    manifest_groups = retriever.manifest.get("groups") or [retriever.manifest.get("group") or "L21"]
+    groups = tuple(item.strip() for item in (args.groups or ",".join(manifest_groups)).split(",") if item.strip())
+    hits = retriever.search(RetrievalRequest("cli", args.query, groups=groups, top_k=args.top_k, filters=filters))
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps({"health": retriever.health().to_dict(), "hits": [hit.to_dict() for hit in hits]}, ensure_ascii=False, indent=2))
     return 0
 

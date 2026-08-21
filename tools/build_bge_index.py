@@ -24,6 +24,9 @@ def main() -> int:
     parser.add_argument("--cache-dir", type=Path, default=os.environ.get("AIC_BGE_CACHE_DIR"))
     parser.add_argument("--device", default=os.environ.get("AIC_BGE_DEVICE"))
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--checkpoint-documents", type=int, default=512)
+    parser.add_argument("--progress", choices=("tqdm", "none"), default="tqdm")
+    parser.add_argument("--restart", action="store_true", help="Discard a partial embedding checkpoint and start over.")
     parser.add_argument("--allow-download", action="store_true")
     args = parser.parse_args()
 
@@ -35,13 +38,38 @@ def main() -> int:
         device=args.device,
         batch_size=args.batch_size,
     )
-    manifest = build_bge_index(
-        root=ROOT,
-        corpus_path=args.corpus,
-        corpus_manifest_path=args.corpus_manifest,
-        output_dir=args.output_dir,
-        encoder=encoder,
-    )
+    progress_bar = None
+    progress = None
+    if args.progress == "tqdm":
+        try:
+            from tqdm.auto import tqdm
+        except ImportError:
+            print("tqdm is unavailable; continuing without a progress bar.", file=sys.stderr, flush=True)
+        else:
+            def report_progress(processed: int, total: int) -> None:
+                nonlocal progress_bar
+                if progress_bar is None:
+                    progress_bar = tqdm(total=total, desc="BGE embeddings", unit="doc", dynamic_ncols=True, smoothing=0.1)
+                progress_bar.update(max(0, processed - progress_bar.n))
+                if processed == total:
+                    progress_bar.set_description("BGE: finalizing FAISS", refresh=False)
+                progress_bar.refresh()
+
+            progress = report_progress
+    try:
+        manifest = build_bge_index(
+            root=ROOT,
+            corpus_path=args.corpus,
+            corpus_manifest_path=args.corpus_manifest,
+            output_dir=args.output_dir,
+            encoder=encoder,
+            checkpoint_documents=args.checkpoint_documents,
+            progress=progress,
+            restart=args.restart,
+        )
+    finally:
+        if progress_bar is not None:
+            progress_bar.close()
     print(json.dumps({"output": str(args.output_dir), "model": manifest["model"], "faiss": manifest["faiss"], "timing_ms": manifest["timing_ms"]}, ensure_ascii=False, indent=2))
     return 0
 

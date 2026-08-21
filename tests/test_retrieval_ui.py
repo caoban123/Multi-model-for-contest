@@ -96,6 +96,24 @@ def test_resolve_keyframe_path_accepts_existing_repo_file(tmp_path: Path) -> Non
     assert service.resolve_keyframe_path("data/keyframes/L21_V001/001.jpg") == image.resolve()
 
 
+def test_resolve_media_accepts_configured_external_data_root(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    external_data = tmp_path / "external-data"
+    repo_root.mkdir()
+    image = external_data / "keyframes" / "L21_V001" / "001.jpg"
+    video = external_data / "videos" / "L21_V001.mp4"
+    image.parent.mkdir(parents=True)
+    video.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    video.write_bytes(b"video")
+    service = make_service(repo_root)
+    service.registry = {"data_root": str(external_data)}
+    service.assets_by_video["L21_V001"]["video_path"] = str(video)
+
+    assert service.resolve_keyframe_path(str(image)) == image.resolve()
+    assert service.resolve_video_path("L21_V001") == video.resolve()
+
+
 def test_resolve_video_path_accepts_registered_repo_video(tmp_path: Path) -> None:
     service = make_service(tmp_path)
     video = tmp_path / "data" / "videos" / "L21_V001.mp4"

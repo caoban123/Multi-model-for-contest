@@ -741,6 +741,19 @@ Quyết định sau H6:
 - H7 phải route theo intent: visual-heavy ưu tiên CLIP; exact keyword/date/OCR/ASR ưu tiên BM25; semantic text ưu tiên BGE; chỉ fusion các kênh có bằng chứng phù hợp.
 - BGE/BM25 vẫn modular và opt-in; mọi fallback/warning phải hiện trong trace/UI.
 
+### Full-data rollout status - 21-08-2026
+
+| Stage | Status | Evidence |
+|---|---|---|
+| L21-L30 registry/data audit | `VERIFIED` | 873 videos and 177,321 aligned frames across L21-L30 |
+| Full CLIP NumPy index | `VERIFIED` | 177,321 normalized 512-dimensional vectors on E |
+| Full object SQLite | `VERIFIED` | 177,321 available frames, 17,732,100 detections, SQLite quick check `ok` |
+| Full deterministic text corpus | `VERIFIED` | 173,393 unique documents; SHA-256, JSONL, mapping and source-count audit pass |
+| Full BM25 index | `VERIFIED` | 173,393 SQLite/FTS rows; checksum, integrity, group filter and multilingual search smokes pass |
+| Full BGE/FAISS index | `NEXT_RESUMABLE` | 512-document checkpoints, atomic publish and batched FAISS construction are verified |
+
+The full-data rollout does not change the retrieval default. CLIP remains the baseline and the L21-L30 BM25/BGE channels stay opt-in until new benchmark and ablation evidence passes the promotion gate.
+
 ## Structured JSON contract
 
 Agent chỉ trả JSON có thông tin phục vụ review. CSV official phải được sinh bởi module deterministic riêng.

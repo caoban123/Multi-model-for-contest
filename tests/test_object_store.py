@@ -29,7 +29,15 @@ def test_build_store_preserves_missing_frame_as_unknown(tmp_path: Path) -> None:
     object_path.parent.mkdir(parents=True)
     object_path.write_text(json.dumps({"detection_class_labels":["1"], "detection_class_entities":["Mobile phone"], "detection_scores":["0.8"], "detection_boxes":[["0.1","0.2","0.5","0.6"]]}), encoding="utf-8")
     db_path = tmp_path / "objects.sqlite"
-    manifest = build_object_store(refs_path, tmp_path / "objects", root / "config" / "object_aliases_v1.json", db_path, {"L21"})
+    progress: list[tuple[int, int, int]] = []
+    manifest = build_object_store(
+        refs_path,
+        tmp_path / "objects",
+        root / "config" / "object_aliases_v1.json",
+        db_path,
+        {"L21"},
+        progress=lambda processed, total, detections: progress.append((processed, total, detections)),
+    )
     assert manifest["frame_count"] == 2
     assert manifest["detection_count"] == 1
     assert manifest["missing_data"]["frames_unknown"] == 1
@@ -41,3 +49,5 @@ def test_build_store_preserves_missing_frame_as_unknown(tmp_path: Path) -> None:
     assert frames == [(1, "AVAILABLE"), (2, "UNKNOWN")]
     assert detection[:2] == ("Mobile phone", "phone")
     assert detection[2:] == pytest.approx((0.4, 0.3, 0.16))
+    assert progress == [(2, 2, 1)]
+    assert not db_path.with_suffix(".sqlite.building").exists()
