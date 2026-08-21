@@ -26,14 +26,17 @@ def main() -> int:
     parser.add_argument("--model-id", default=os.environ.get("AIC_BGE_MODEL_ID", "BAAI/bge-m3"))
     parser.add_argument("--model-path", default=os.environ.get("AIC_BGE_MODEL_PATH"))
     parser.add_argument("--device", default=os.environ.get("AIC_BGE_DEVICE"))
+    parser.add_argument("--groups", default="L21", help="Comma-separated groups included in benchmark requests.")
     parser.add_argument("--rrf-k", type=int, default=60)
     parser.add_argument("--candidate-pool", type=int, default=200)
     parser.add_argument("--document-top-k", type=int, default=100)
     parser.add_argument("--video-top-k", type=int, default=10)
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / "benchmarks" / "hybrid" / "bge_bm25_rrf_smoke_v1.json")
     args = parser.parse_args()
+    groups = tuple(item.strip() for item in args.groups.split(",") if item.strip())
+    if not groups:
+        parser.error("--groups must contain at least one group")
 
-    definition, queries = load_benchmark_queries(args.queries)
     load_started = time.perf_counter()
     encoder = BgeEncoder(args.model_id, model_path=args.model_path, local_files_only=True, device=args.device)
     bge = BgeRetriever(ROOT, args.bge_index_dir, encoder)
@@ -43,7 +46,15 @@ def main() -> int:
         RrfFusionConfig(rrf_k=args.rrf_k, candidate_pool=args.candidate_pool),
     )
     load_ms = (time.perf_counter() - load_started) * 1000
-    result = run_individual_benchmark(retriever, queries, document_top_k=args.document_top_k, video_top_k=args.video_top_k)
+    definition, queries = load_benchmark_queries(args.queries)
+    result = run_individual_benchmark(
+        retriever,
+        queries,
+        groups=groups,
+        document_top_k=args.document_top_k,
+        video_top_k=args.video_top_k,
+    )
+    result["groups"] = list(groups)
     result["benchmark_definition"] = {
         "version": definition.get("version"),
         "status": definition.get("status"),

@@ -52,3 +52,26 @@ def test_clip_adapter_rejects_non_matching_group(tmp_path: Path) -> None:
     registry.write_text(json.dumps({"videos": []}), encoding="utf-8")
     retriever = ClipRetriever(tmp_path, index_dir, registry, Encoder(), allow_stale_index=True)
     assert retriever.search(RetrievalRequest("q", "person", groups=("L22",), top_k=1)) == []
+
+
+def test_clip_adapter_accepts_required_keyframe_index_contract(tmp_path: Path) -> None:
+    index_dir = tmp_path / "index"
+    save_numpy_index(
+        index_dir,
+        np.asarray([[1.0, 0.0]], dtype=np.float32),
+        [FrameRef("L21_V001", "L21", 1, 10, 0.5, 20.0, "one.jpg")],
+        {"groups": ["L21"], "require_keyframes": True},
+    )
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"videos": []}), encoding="utf-8")
+
+    retriever = ClipRetriever(
+        tmp_path,
+        index_dir,
+        registry,
+        Encoder(),
+        require_keyframes=True,
+        allow_stale_index=True,
+    )
+
+    assert retriever.health().details["groups"] == ("L21",)

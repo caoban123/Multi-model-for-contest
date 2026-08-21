@@ -351,7 +351,7 @@ class BgeRetriever:
         self.index_path = self.index_dir / "vectors.faiss"
         if not self.manifest_path.is_file():
             raise FileNotFoundError(self.manifest_path)
-        self.manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.manifest = json.loads(self.manifest_path.read_bytes().decode("utf-8"))
         raw_corpus = Path(str(self.manifest["corpus"]["path"]))
         self.corpus_path = raw_corpus if raw_corpus.is_absolute() else self.root / raw_corpus
         self.documents = _load_documents(self.corpus_path)

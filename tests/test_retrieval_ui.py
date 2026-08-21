@@ -322,6 +322,7 @@ def test_trake_request_can_opt_in_to_frame_level_hybrid_channels(tmp_path: Path)
         def search_channel(self, name, request):
             assert name == "bm25"
             assert request.query_text == "mua lon"
+            assert request.groups == ("L21",)
             return [RetrievalHit("bm25", 1, 4.2, "L21_V001", "asr", "asr:1", 2, 30, 1.0, "mua lon")]
 
     service.hybrid_query_planner = Planner()

@@ -34,21 +34,33 @@ def main() -> int:
     parser.add_argument("--bge-model-id", default=os.environ.get("AIC_BGE_MODEL_ID", "BAAI/bge-m3"))
     parser.add_argument("--bge-model-path", default=os.environ.get("AIC_BGE_MODEL_PATH"))
     parser.add_argument("--device", default=os.environ.get("AIC_BGE_DEVICE"))
+    parser.add_argument("--groups", default="L21", help="Comma-separated groups included in benchmark requests.")
+    parser.add_argument("--require-keyframes", action="store_true")
     parser.add_argument("--rrf-k", type=int, default=60)
     parser.add_argument("--candidate-pool", type=int, default=200)
     parser.add_argument("--document-top-k", type=int, default=200)
     parser.add_argument("--video-top-k", type=int, default=10)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    groups = tuple(item.strip() for item in args.groups.split(",") if item.strip())
+    if not groups:
+        parser.error("--groups must contain at least one group")
 
-    definition, queries = load_benchmark_queries(args.queries)
     load_started = time.perf_counter()
     clip_encoder = ClipTextEncoder(args.clip_model_id, args.clip_cache_dir, True)
-    clip = ClipRetriever(ROOT, args.clip_index_dir, args.registry, clip_encoder)
+    clip = ClipRetriever(
+        ROOT,
+        args.clip_index_dir,
+        args.registry,
+        clip_encoder,
+        groups=groups,
+        require_keyframes=args.require_keyframes,
+    )
     bge_encoder = BgeEncoder(args.bge_model_id, model_path=args.bge_model_path, local_files_only=True, device=args.device)
     bge = BgeRetriever(ROOT, args.bge_index_dir, bge_encoder)
     bm25 = Bm25Retriever(ROOT, args.bm25_index_dir)
     load_ms = (time.perf_counter() - load_started) * 1000
+    definition, queries = load_benchmark_queries(args.queries)
 
     retrievers = {"clip": clip, "bge": bge, "bm25": bm25}
     profiles = {
@@ -72,6 +84,7 @@ def main() -> int:
         result = run_individual_benchmark(
             retriever,
             queries,
+            groups=groups,
             document_top_k=args.document_top_k,
             video_top_k=args.video_top_k,
         )
@@ -101,6 +114,8 @@ def main() -> int:
             "candidate_pool": args.candidate_pool,
             "document_top_k": args.document_top_k,
             "video_top_k": args.video_top_k,
+            "groups": list(groups),
+            "require_keyframes": args.require_keyframes,
         },
         "summary": summary,
         "runs": runs,

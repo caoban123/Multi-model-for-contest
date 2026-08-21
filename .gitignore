@@ -1,6 +1,7 @@
 # Local contest data is large and should not be committed.
 data/
 data_*_backup_*/
+/l21_l30_bge_bundle.tar.gz
 
 # Generated registries, indexes, caches, and reports that can be rebuilt.
 artifacts/

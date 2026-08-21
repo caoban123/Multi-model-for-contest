@@ -36,7 +36,7 @@ from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
 from aic_retrieval.translation import DEFAULT_GEMINI_API_URL, ExternalTranslator, TranslationConfig
 from aic_retrieval.phase5_store import Phase5SearchService
 from aic_retrieval.query_planner import RuleBasedQueryPlanner
-from aic_retrieval.hybrid_query_planner import HybridQueryPlanner
+from aic_retrieval.hybrid_query_planner import HybridQueryPlan, HybridQueryPlanner
 from aic_retrieval.hybrid_engine import HybridRetrievalEngine
 from aic_retrieval.rrf_fusion import RrfFusionConfig
 from aic_retrieval.clip_retriever import ClipRetriever
@@ -108,12 +108,14 @@ class TimedEventResults(dict[str, list[dict[str, Any]]]):
         stage_timings_ms: dict[str, float],
         *,
         query_plans: dict[str, dict[str, Any]] | None = None,
+        query_traces: dict[str, dict[str, Any]] | None = None,
         hybrid_failures: dict[str, dict[str, str]] | None = None,
         skipped_without_frame: dict[str, dict[str, int]] | None = None,
     ) -> None:
         super().__init__(values)
         self.stage_timings_ms = stage_timings_ms
         self.query_plans = query_plans or {}
+        self.query_traces = query_traces or {}
         self.hybrid_failures = hybrid_failures or {}
         self.skipped_without_frame = skipped_without_frame or {}
 
@@ -154,7 +156,11 @@ class RetrievalUiService:
         self.object_service: ObjectSearchService | None = None
         if config.object_store_path is not None and config.object_store_path.is_file():
             aliases_path = config.object_aliases_path or config.repo_root / "config" / "object_aliases_v1.json"
-            self.object_service = ObjectSearchService(config.object_store_path, load_alias_dictionary(aliases_path))
+            self.object_service = ObjectSearchService(
+                config.object_store_path,
+                load_alias_dictionary(aliases_path),
+                config.repo_root / "data" / "objects",
+            )
         self.attribute_service = ColorAttributeService(config.repo_root, self.refs)
         self.phase5_service = Phase5SearchService(config.phase5_store_path, self.refs) if config.phase5_store_path else None
         self.query_planner = RuleBasedQueryPlanner()
@@ -229,10 +235,16 @@ class RetrievalUiService:
         hybrid_requested = bool(request.constraints.get("hybrid_retrieval"))
         hybrid_active = hybrid_requested and self.hybrid_engine is not None
         use_gemini = bool(request.constraints.get("hybrid_use_gemini", True))
-        hybrid_plans = {
-            event.event_id: self.hybrid_query_planner.plan(event.text, use_gemini=use_gemini)
-            for event in request.events
-        } if hybrid_active else {}
+        hybrid_planning: dict[str, Any] = {}
+        hybrid_plans: dict[str, HybridQueryPlan] = {}
+        if hybrid_active:
+            for event in request.events:
+                if hasattr(self.hybrid_query_planner, "plan_with_trace"):
+                    planning = self.hybrid_query_planner.plan_with_trace(event.text, use_gemini=use_gemini)
+                    hybrid_planning[event.event_id] = planning
+                    hybrid_plans[event.event_id] = planning.plan
+                else:
+                    hybrid_plans[event.event_id] = self.hybrid_query_planner.plan(event.text, use_gemini=use_gemini)
         hybrid_failures: dict[str, dict[str, str]] = {}
         skipped_without_frame: dict[str, dict[str, int]] = {}
         if hybrid_requested and not hybrid_active:
@@ -288,7 +300,7 @@ class RetrievalUiService:
             result_batches = search_numpy_index_batch(self.index, self.refs, vectors, pool_size)
             vector_search_ms = (time.perf_counter() - vector_started) * 1000
             for (event_id, variant), results in zip(query_entries, result_batches):
-                clip_by_event[event_id].append((variant, results))
+                clip_by_event[event_id].append((variant, [result for result in results if result.group == request.group]))
         timing_sink = {"fusion": 0.0}
         channel_started = time.perf_counter()
         if hybrid_active:
@@ -302,6 +314,7 @@ class RetrievalUiService:
                     hybrid_failure_sink=hybrid_failures,
                     skipped_without_frame_sink=skipped_without_frame,
                     query_id=request.query_id,
+                    groups=(request.group,),
                 )
                 for event_id, event in event_by_id.items()
             }
@@ -320,7 +333,7 @@ class RetrievalUiService:
             "embedding": round(embedding_ms, 3),
             "retrieval": round(vector_search_ms + max(0.0, channel_ms - timing_sink["fusion"]), 3),
             "fusion": round(timing_sink["fusion"], 3),
-        }, query_plans={key: value.to_dict() for key, value in hybrid_plans.items()}, hybrid_failures=hybrid_failures, skipped_without_frame=skipped_without_frame)
+        }, query_plans={key: value.to_dict() for key, value in hybrid_plans.items()}, query_traces={key: value.trace.to_dict() for key, value in hybrid_planning.items()}, hybrid_failures=hybrid_failures, skipped_without_frame=skipped_without_frame)
 
     def _trake_retrieve_event(
         self,
@@ -333,6 +346,7 @@ class RetrievalUiService:
         hybrid_failure_sink: dict[str, dict[str, str]] | None = None,
         skipped_without_frame_sink: dict[str, dict[str, int]] | None = None,
         query_id: str = "trake-event",
+        groups: tuple[str, ...] | None = None,
     ) -> list[dict[str, Any]]:
         fused: dict[tuple[str, int], dict[str, Any]] = {}
         ref_by_key = self.structured_generator.ref_by_key
@@ -340,6 +354,7 @@ class RetrievalUiService:
         def add(video_id: str, keyframe_id: int, modality: str, rank: int, score: float | None, evidence: dict[str, Any], *, source_key: str | None = None, query_variant: str | None = None) -> None:
             ref = ref_by_key.get((video_id, keyframe_id))
             if ref is None: return
+            if groups and ref.group not in groups: return
             item = fused.setdefault((video_id,keyframe_id), {**asdict(ref),"provenance":[],"evidence":{"fps":ref.fps},"raw_modality_scores":{},"raw_modality_ranks":{},"rrf_score":0.0})
             if modality not in item["provenance"]: item["provenance"].append(modality)
             evidence_row = {**evidence, "query_variant": query_variant} if query_variant else evidence
@@ -395,7 +410,7 @@ class RetrievalUiService:
                 self.hybrid_engine,
                 hybrid_plan,
                 query_id=f"{query_id}:{event.event_id}",
-                groups=tuple(sorted(self.config.groups)),
+                groups=groups or tuple(sorted(self.config.groups)),
                 top_k=pool_size,
             )
             if hybrid_failure_sink is not None and hybrid.failures:
@@ -597,6 +612,7 @@ class RetrievalUiService:
         enable_reranker: bool = False,
         reranker_top_n: int = 20,
         query_variants: tuple[str, ...] | None = None,
+        restrict_structured_to_clip_candidates: bool = False,
     ) -> dict[str, Any]:
         query = query.strip()
         if not query:
@@ -623,6 +639,7 @@ class RetrievalUiService:
             metadata_constraints=MetadataConstraints(channel=metadata_author or None, publish_date=metadata_date or None, title_phrase=metadata_title or None),
             metadata_mode=metadata_filter_mode if enable_metadata else "disabled", clip_candidate_pool=max(candidate_pool, top_k), fusion_method=fusion_method,
             ocr_mode=ocr_filter_mode if enable_ocr else "disabled", asr_mode=asr_filter_mode if enable_asr else "disabled", ocr_min_confidence=ocr_min_confidence,
+            restrict_structured_to_clip_candidates=restrict_structured_to_clip_candidates,
         )
         started = time.perf_counter()
         query_plan = self.query_planner.plan(query) if enable_query_planner or enable_reranker else None
@@ -710,6 +727,10 @@ class RetrievalUiService:
         for result in response["results"]:
             keyframe_path = self._hybrid_keyframe_path(result["video_id"], result.get("keyframe_id"))
             enriched.append(self.enrich_result({**result, "score": result["raw_score"], "keyframe_path": keyframe_path}))
+        enriched, structured = self._apply_agent_structured_constraints(plan, enriched, top_k)
+        failures = dict(response.get("failures", {}))
+        if structured.get("error"):
+            failures["structured"] = str(structured["error"])
         return {
             **response,
             "mode": "agent_hybrid",
@@ -717,8 +738,146 @@ class RetrievalUiService:
             "agent_trace": planning.trace.to_dict(),
             "default_search_unchanged": True,
             "top_k": top_k,
+            "fusion_method": "rrf" if structured.get("applied") else response.get("fusion_method"),
+            "failures": failures,
+            "structured_constraints": structured,
             "results": enriched,
             "video_results": enriched,
+        }
+
+    def _apply_agent_structured_constraints(
+        self,
+        plan: HybridQueryPlan,
+        hybrid_results: list[dict[str, Any]],
+        top_k: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        suggestions = dict(plan.structured_filter_suggestions)
+        object_service = getattr(self, "object_service", None)
+        attribute_service = getattr(self, "attribute_service", None)
+        phase5_service = getattr(self, "phase5_service", None)
+        enable_objects = bool(suggestions.get("enable_objects") and suggestions.get("object_label") and object_service)
+        enable_attributes = bool(suggestions.get("enable_attributes") and suggestions.get("attribute_color") and attribute_service and attribute_service.available)
+        enable_ocr = bool(suggestions.get("enable_ocr") and phase5_service and phase5_service.available)
+        enable_asr = bool(suggestions.get("enable_asr") and phase5_service and phase5_service.available)
+        enable_metadata = bool(
+            suggestions.get("enable_metadata")
+            and getattr(self, "metadata_docs", None)
+            and any(suggestions.get(key) for key in ("metadata_author", "metadata_date", "metadata_title"))
+        )
+        enabled = {
+            "objects": enable_objects,
+            "attributes": enable_attributes,
+            "ocr": enable_ocr,
+            "asr": enable_asr,
+            "metadata": enable_metadata,
+        }
+        if not any(enabled.values()):
+            return hybrid_results, {"applied": False, "enabled": enabled, "fusion_method": "none"}
+        try:
+            structured = self.structured_search(
+                plan.visual_clip_query_en,
+                top_k=max(top_k, 30),
+                candidate_pool=max(60, top_k * 2),
+                enable_clip=True,
+                enable_objects=enable_objects,
+                enable_attributes=enable_attributes,
+                enable_ocr=enable_ocr,
+                enable_asr=enable_asr,
+                enable_metadata=enable_metadata,
+                object_label=str(suggestions.get("object_label") or ""),
+                attribute_color=str(suggestions.get("attribute_color") or ""),
+                metadata_author=suggestions.get("metadata_author"),
+                metadata_date=suggestions.get("metadata_date"),
+                metadata_title=suggestions.get("metadata_title"),
+                object_filter_mode="soft",
+                attribute_filter_mode="soft",
+                ocr_filter_mode="soft",
+                asr_filter_mode="soft",
+                metadata_filter_mode="soft",
+                fusion_method="rrf",
+                restrict_structured_to_clip_candidates=True,
+            )
+        except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
+            return hybrid_results, {
+                "applied": False,
+                "enabled": enabled,
+                "fusion_method": "none",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+        structured_results = list(structured.get("results") or [])
+        channel_counts = dict(structured.get("channel_counts") or {})
+        support_count = sum(
+            int(channel_counts.get(key, 0) or 0)
+            for key, enabled_now in (
+                ("object_frames", enable_objects),
+                ("attribute_frames", enable_attributes),
+                ("ocr_frames", enable_ocr),
+                ("asr_segments", enable_asr),
+                ("metadata_videos", enable_metadata),
+            )
+            if enabled_now
+        )
+        if support_count == 0:
+            return hybrid_results, {
+                "applied": False,
+                "enabled": enabled,
+                "fusion_method": "none",
+                "structured_hit_count": 0,
+                "channel_counts": channel_counts,
+                "warning": "structured constraints found no supporting evidence; base retrieval was preserved",
+            }
+        if not structured_results:
+            return hybrid_results, {
+                "applied": False,
+                "enabled": enabled,
+                "fusion_method": "none",
+                "structured_hit_count": 0,
+                "warning": "structured constraints returned no supporting result; base retrieval was preserved",
+            }
+        by_video: dict[str, dict[str, Any]] = {}
+        rank_by_video: dict[str, dict[str, int]] = {}
+        for channel, rows in (("retrieval", hybrid_results), ("structured", structured_results)):
+            for rank, row in enumerate(rows, 1):
+                video_id = str(row.get("video_id") or "")
+                if not video_id:
+                    continue
+                rank_by_video.setdefault(video_id, {})[channel] = rank
+                by_video.setdefault(video_id, dict(row))
+        ordered = sorted(
+            by_video,
+            key=lambda video_id: (
+                -sum(1.0 / (60.0 + rank) for rank in rank_by_video[video_id].values()),
+                video_id,
+            ),
+        )[:top_k]
+        fused: list[dict[str, Any]] = []
+        for rank, video_id in enumerate(ordered, 1):
+            row = dict(by_video[video_id])
+            channel_ranks = rank_by_video[video_id]
+            score = sum(1.0 / (60.0 + value) for value in channel_ranks.values())
+            raw_provenance = row.get("provenance")
+            provenance = dict(raw_provenance) if isinstance(raw_provenance, dict) else {
+                "structured_modalities": list(raw_provenance or []),
+            }
+            retriever_ranks = dict(provenance.get("retriever_ranks") or {})
+            contributions = dict(provenance.get("contributions") or {})
+            if "structured" in channel_ranks:
+                retriever_ranks["structured"] = channel_ranks["structured"]
+                contributions["structured"] = 1.0 / (60.0 + channel_ranks["structured"])
+            provenance.update({
+                "retriever_ranks": retriever_ranks,
+                "contributions": contributions,
+                "agent_constraint_fusion": "rrf-k60-v1",
+            })
+            row.update({"rank": rank, "score": score, "raw_score": score, "provenance": provenance})
+            fused.append(row)
+        return fused, {
+            "applied": True,
+            "enabled": enabled,
+            "fusion_method": "rrf",
+            "structured_hit_count": len(structured_results),
+            "channel_counts": channel_counts,
         }
 
     def qa_prepare(
@@ -1031,6 +1190,7 @@ class RetrievalUiService:
                 self.config.registry_path,
                 self._encoder(),
                 groups=tuple(sorted(self.config.groups)),
+                require_keyframes=self.config.require_keyframes,
                 allow_stale_index=self.config.allow_stale_index,
             )
         }
@@ -1112,6 +1272,8 @@ class RetrievalUiService:
             "mapping_warning": "frame_idx/keyframe_id are retrieval diagnostics, not confirmed official frame_id values",
             "agent_plan": response.get("query_plan"),
             "agent_trace": response.get("agent_trace"),
+            "fusion_method": response.get("fusion_method"),
+            "structured_constraints": response.get("structured_constraints", {"applied": False}),
             "channel_hit_counts": response.get("channel_hit_counts", {}),
             "latency_ms": response.get("latency_ms", {}),
             "health": response.get("health", {}),

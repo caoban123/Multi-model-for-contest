@@ -33,12 +33,8 @@
           <label><span>Query ID</span><input id="query-id" required placeholder="query-1-kis"></label>
           <fieldset class="task-control"><legend>Task</legend><label><input type="radio" name="task" value="KIS" checked> KIS</label><label><input type="radio" name="task" value="QA"> Q&amp;A</label><label><input type="radio" name="task" value="TRAKE"> TRAKE</label></fieldset>
           <label class="query-field"><span>Query</span><textarea id="query" required rows="3" placeholder="person wearing a red shirt"></textarea></label>
-          <div class="agent-options"><label><input id="use-hybrid" type="checkbox" checked> Hybrid retrieval</label><label><input id="use-gemini" type="checkbox" checked> Gemini planner</label></div>
-          <div id="workflow-import" class="workflow-import" hidden>
-            <label><span>Reviewed workflow session</span><input id="workflow-session-id" placeholder="qa-... or trake-..."></label>
-            <label><span>Confirmed review ID</span><input id="workflow-review-id" placeholder="review-..."></label>
-            <label><span id="official-frames-label">Official frame ID</span><input id="workflow-frame-ids" placeholder="1450"></label>
-          </div>
+          <label id="qa-question-wrap" class="query-field" hidden><span>Question</span><textarea id="qa-question" rows="2" placeholder="What is the person doing?"></textarea></label>
+          <div class="agent-options"><label><input id="use-hybrid" type="checkbox" checked> Hybrid retrieval</label><label><input id="use-gemini" type="checkbox" checked> Gemini planner</label><label id="gemini-answer-wrap" hidden><input id="use-gemini-answer" type="checkbox" checked> Gemini answer</label></div>
           <button id="run-button" type="submit" disabled>Run Agent</button>
         </form>
         <div id="agent-trace" class="agent-trace" hidden></div>
@@ -63,8 +59,12 @@
             </div>
           </details>
         </section>
+        <section id="task-workflow" class="task-workflow" hidden aria-live="polite">
+          <div class="section-head"><div><span class="kicker">REVIEW WORKFLOW</span><h2 id="workflow-title">Task evidence</h2></div><span id="workflow-state" class="state-badge">Waiting</span></div>
+          <div id="workflow-content"></div>
+        </section>
         <div id="candidates" class="candidate-list"><p class="empty">No candidate result.</p></div>
-        <div class="confirm-bar"><span id="selection-count">0 selected</span><button id="confirm-button" type="button" disabled>Confirm to queue</button></div>
+        <div id="confirm-bar" class="confirm-bar"><span id="selection-count">0 selected</span><button id="confirm-button" type="button" disabled>Confirm to queue</button></div>
       </section>
 
       <aside class="validation-panel">
@@ -75,6 +75,11 @@
       </aside>
     </section>
   </main>
+  <dialog id="image-dialog" class="image-dialog" aria-labelledby="image-dialog-title">
+    <div class="image-dialog-head"><div><span class="kicker">FRAME INSPECTOR</span><h2 id="image-dialog-title">Frame preview</h2></div><button id="image-close" class="secondary" type="button" aria-label="Close image preview">Close</button></div>
+    <div class="image-stage"><button id="image-previous" class="image-nav" type="button" aria-label="Previous frame">&#8592;</button><img id="image-preview" alt="Selected frame preview"><button id="image-next" class="image-nav" type="button" aria-label="Next frame">&#8594;</button></div>
+    <div class="image-dialog-foot"><code id="image-meta">-</code><button id="copy-frame" class="secondary" type="button">Copy frame details</button></div>
+  </dialog>
   <script src="/submission/static/app.js"></script>
 </body>
 </html>

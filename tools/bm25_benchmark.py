@@ -18,13 +18,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run a reproducible BM25-only benchmark over the L21 text corpus.")
     parser.add_argument("--queries", type=Path, default=ROOT / "benchmarks" / "hybrid_retrieval_smoke_v1.json")
     parser.add_argument("--index-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_bm25")
+    parser.add_argument("--groups", default="L21", help="Comma-separated groups included in benchmark requests.")
     parser.add_argument("--document-top-k", type=int, default=100)
     parser.add_argument("--video-top-k", type=int, default=10)
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / "benchmarks" / "hybrid" / "bm25_smoke_v1.json")
     args = parser.parse_args()
+    groups = tuple(item.strip() for item in args.groups.split(",") if item.strip())
+    if not groups:
+        parser.error("--groups must contain at least one group")
     definition, queries = load_benchmark_queries(args.queries)
     retriever = Bm25Retriever(ROOT, args.index_dir)
-    result = run_individual_benchmark(retriever, queries, document_top_k=args.document_top_k, video_top_k=args.video_top_k)
+    result = run_individual_benchmark(
+        retriever,
+        queries,
+        groups=groups,
+        document_top_k=args.document_top_k,
+        video_top_k=args.video_top_k,
+    )
+    result["groups"] = list(groups)
     result["benchmark_definition"] = {
         "version": definition.get("version"),
         "status": definition.get("status"),

@@ -12,7 +12,7 @@ from aic_retrieval.query_planner import RuleBasedQueryPlanner, TEXT_MARKERS, con
 from aic_retrieval.translation import TranslationConfig, http_error_detail, parse_gemini_translation
 
 
-HYBRID_PLAN_VERSION = "hybrid-query-plan-v2"
+HYBRID_PLAN_VERSION = "hybrid-query-plan-v3"
 AGENT_TRACE_VERSION = "agent-planning-trace-v1"
 MAX_RAW_TRACE_CHARS = 16_384
 ALLOWED_RETRIEVERS = ("clip", "bge", "bm25")
@@ -20,6 +20,9 @@ ALLOWED_INTENTS = {"visual", "semantic_text", "lexical_text", "mixed"}
 CONTENT_MARKERS = (
     "nội dung", "chủ đề", "bản tin", "về", "đề cập", "nói", "phát biểu",
     "content", "topic", "report", "about", "mentions", "says", "speech",
+)
+EXACT_MARKERS = (
+    "chính xác", "nguyên văn", "từ khóa", "mã", "số", "exact", "keyword", "code",
 )
 
 
@@ -109,21 +112,27 @@ class LocalHybridQueryPlanner:
         quoted = quoted_phrases(query)
         explicit_ocr = any(contains_phrase(text, marker) for marker in TEXT_MARKERS)
         has_number = bool(re.search(r"\d", query))
-        lexical = bool({"ocr", "asr", "metadata"} & modalities or quoted or has_number)
+        lexical = bool(
+            "ocr" in modalities
+            or "metadata" in modalities
+            or quoted
+            or has_number
+            or any(contains_phrase(text, marker) for marker in EXACT_MARKERS)
+        )
         semantic = bool("asr" in modalities or any(marker in text for marker in CONTENT_MARKERS))
-        metadata_only = "metadata" in modalities and not ({"objects", "attributes"} & modalities) and not semantic
+        visual = bool({"objects", "attributes"} & modalities) or not (lexical or semantic)
 
         routes: list[str] = []
         reasons: list[str] = []
-        if not metadata_only:
+        if visual:
             routes.append("clip")
-            reasons.append("visual semantics remain the baseline route")
+            reasons.append("query describes visible scene, action, object, or color")
         if semantic:
             routes.append("bge")
             reasons.append("query asks about spoken or semantic content")
         if lexical:
             routes.append("bm25")
-            reasons.append("query contains exact text, metadata, speech markers, quotes, or numbers")
+            reasons.append("query contains exact text, metadata, quotes, keywords, or numbers")
         if not routes:
             routes.append("clip")
         ordered_routes = tuple(name for name in ALLOWED_RETRIEVERS if name in routes)
@@ -394,4 +403,16 @@ class HybridQueryPlanner:
         warnings = list(local.warnings)
         if "asr" in base_plan.recommended_modalities and "ASR coverage is partial for L21" not in warnings:
             warnings.append("ASR coverage is partial for L21")
-        return replace(plan, warnings=tuple(warnings), source_filters=local.source_filters), raw_text
+        normalized_routes = local.enabled_retrievers
+        normalization_reason = "routes normalized by deterministic intent guardrails"
+        reasons = tuple(dict.fromkeys((*plan.reasons, normalization_reason)))[:3]
+        return replace(
+            plan,
+            enabled_retrievers=normalized_routes,
+            intent=local.intent,
+            profile=_profile(normalized_routes),
+            fusion_method="rrf" if len(normalized_routes) > 1 else "none",
+            reasons=reasons,
+            warnings=tuple(warnings),
+            source_filters=local.source_filters,
+        ), raw_text

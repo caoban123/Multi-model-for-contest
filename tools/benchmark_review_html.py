@@ -313,10 +313,12 @@ def image_src_for(keyframe_path: str, output_path: Path) -> str:
     path = Path(keyframe_path)
     if not path.is_absolute():
         path = ROOT / path
+    absolute_path = Path(os.path.abspath(path))
+    absolute_output_dir = Path(os.path.abspath(output_path.parent))
     try:
-        return Path(os.path.relpath(path.resolve(), output_path.parent.resolve())).as_posix()
+        return Path(os.path.relpath(absolute_path, absolute_output_dir)).as_posix()
     except ValueError:
-        return path.resolve().as_uri()
+        return absolute_path.as_uri()
 
 
 if __name__ == "__main__":

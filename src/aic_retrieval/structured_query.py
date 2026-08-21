@@ -49,6 +49,7 @@ class StructuredQuery:
     ocr_min_confidence: float = 0.0
     clip_candidate_pool: int = 100
     fusion_method: str = "rrf"
+    restrict_structured_to_clip_candidates: bool = False
 
     def __post_init__(self) -> None:
         validate_mode(self.clip_mode)

@@ -62,6 +62,7 @@ def test_builder_converts_hybrid_channel_provenance_to_typed_evidence() -> None:
         "mode": "agent_hybrid",
         "profile": "clip_bge_bm25",
         "query_plan": {"visual_clip_query_en": "news report about flooding"},
+        "agent_trace": {"status": "SUCCEEDED", "raw_text": '{"routes":["bge","bm25"]}'},
         "video_results": [{
             "video_id": "L21_V003",
             "rank": 1,
@@ -109,3 +110,4 @@ def test_builder_converts_hybrid_channel_provenance_to_typed_evidence() -> None:
     assert keyframe.payload["keyframe_path"].endswith("007.jpg")
     assert pack.modality_availability[EvidenceModality.ASR] is AvailabilityStatus.AVAILABLE
     assert pack.retrieval_context["profile"] == "clip_bge_bm25"
+    assert pack.retrieval_context["agent_trace"]["status"] == "SUCCEEDED"

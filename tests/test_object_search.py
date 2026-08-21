@@ -66,6 +66,38 @@ def test_multiple_same_label_count_after_nms_and_position(tmp_path: Path) -> Non
     assert result["results"][0]["matched_count"] == 2
 
 
+def test_candidate_scoped_search_only_reads_requested_frames(tmp_path: Path) -> None:
+    db, aliases = make_store(tmp_path)
+    service = ObjectSearchService(db, aliases)
+
+    included = service.search(ObjectPredicate(("person",)), candidate_keys={("L21_V001", 1)})
+    excluded = service.search(ObjectPredicate(("person",)), candidate_keys={("L21_V001", 2)})
+
+    assert [(item["video_id"], item["keyframe_id"]) for item in included["results"]] == [("L21_V001", 1)]
+    assert excluded["results"] == []
+    assert excluded["unknown_frames"] == [{"video_id": "L21_V001", "keyframe_id": 2, "data_status": "UNKNOWN"}]
+
+
+def test_candidate_scoped_search_prefers_frame_json_when_available(tmp_path: Path) -> None:
+    db, aliases = make_store(tmp_path)
+    object_root = tmp_path / "objects"
+    video_root = object_root / "L21_V001"
+    video_root.mkdir(parents=True)
+    (video_root / "001.json").write_text(json.dumps({
+        "detection_class_labels": ["1"],
+        "detection_class_entities": ["Person"],
+        "detection_scores": [0.91],
+        "detection_boxes": [[0.1, 0.1, 0.4, 0.4]],
+    }), encoding="utf-8")
+    service = ObjectSearchService(db, aliases, object_root)
+
+    result = service.search(ObjectPredicate(("person",)), candidate_keys={("L21_V001", 1)})
+
+    assert result["source"] == "frame_json_candidate_scan"
+    assert result["candidate_scope"] == 1
+    assert result["results"][0]["confidence"] == 0.91
+
+
 def test_phone_near_hand_is_labeled_as_heuristic_with_evidence(tmp_path: Path) -> None:
     db, aliases = make_store(tmp_path)
     connection = sqlite3.connect(db)

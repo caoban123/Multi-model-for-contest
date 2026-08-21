@@ -34,6 +34,8 @@ def test_service_kis_agent_keeps_retrieval_frame_separate_from_official_frame(tm
         "query_plan": {"profile": "clip"},
         "agent_trace": {"status": "SUCCEEDED", "raw_text": "{\"routes\":[\"clip\"]}"},
         "channel_hit_counts": {"clip": 1},
+        "fusion_method": "single_channel_rank",
+        "structured_constraints": {"applied": False},
         "latency_ms": {"clip": 1.0, "total": 1.2},
         "video_results": [{
             "rank": 1,
@@ -59,6 +61,8 @@ def test_service_kis_agent_keeps_retrieval_frame_separate_from_official_frame(tm
     assert candidate["metadata"]["title"] == "News presenter"
     assert result["agent_trace"]["status"] == "SUCCEEDED"
     assert result["channel_hit_counts"] == {"clip": 1}
+    assert result["fusion_method"] == "single_channel_rank"
+    assert result["structured_constraints"]["applied"] is False
 
     confirmed = service.submission_confirm(
         session_id,
@@ -80,6 +84,53 @@ def test_service_kis_agent_keeps_retrieval_frame_separate_from_official_frame(tm
         assert "frame_id" in str(exc)
     else:
         raise AssertionError("boolean must not be accepted as an official frame_id")
+
+
+def test_agent_structured_constraints_are_opt_in_and_rrf_fused() -> None:
+    service = RetrievalUiService.__new__(RetrievalUiService)
+    service.object_service = object()
+    service.attribute_service = SimpleNamespace(available=True)
+    service.phase5_service = SimpleNamespace(available=False)
+    service.metadata_docs = []
+    service.structured_search = lambda *_args, **kwargs: {
+        "results": [
+            {"video_id": "L21_V002", "rank": 1, "keyframe_id": 2, "frame_idx": 20, "pts_time": 2.0, "provenance": ["clip", "object"]},
+            {"video_id": "L21_V001", "rank": 2, "keyframe_id": 1, "frame_idx": 10, "pts_time": 1.0},
+        ],
+        "channel_counts": {"object_frames": 2, "attribute_frames": 2},
+    }
+    plan = retrieval_ui.HybridQueryPlan(
+        original_query="person wearing red",
+        visual_clip_query_en="person wearing red",
+        semantic_text_query="person wearing red",
+        lexical_text_query="person wearing red",
+        intent="visual",
+        enabled_retrievers=("clip",),
+        profile="clip",
+        fusion_method="none",
+        reasons=("visible constraint",),
+        structured_filter_suggestions={
+            "enable_objects": True,
+            "object_label": "person",
+            "enable_attributes": True,
+            "attribute_color": "red",
+        },
+    )
+
+    fused, diagnostics = service._apply_agent_structured_constraints(
+        plan,
+        [
+            {"video_id": "L21_V001", "rank": 1, "keyframe_id": 1, "frame_idx": 10, "pts_time": 1.0, "provenance": {"retriever_ranks": {"clip": 1}}},
+            {"video_id": "L21_V003", "rank": 2, "keyframe_id": 3, "frame_idx": 30, "pts_time": 3.0},
+        ],
+        3,
+    )
+
+    assert diagnostics["applied"] is True
+    assert diagnostics["fusion_method"] == "rrf"
+    assert fused[0]["video_id"] == "L21_V001"
+    assert fused[0]["provenance"]["retriever_ranks"] == {"clip": 1, "structured": 2}
+    assert next(item for item in fused if item["video_id"] == "L21_V002")["provenance"]["structured_modalities"] == ["clip", "object"]
 
 
 def test_reviewed_qa_and_trake_adapters_require_manual_official_frames(tmp_path: Path) -> None:

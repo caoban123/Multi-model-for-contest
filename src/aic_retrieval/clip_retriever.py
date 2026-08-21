@@ -27,6 +27,7 @@ class ClipRetriever:
         encoder: ClipQueryEncoder,
         *,
         groups: tuple[str, ...] = ("L21",),
+        require_keyframes: bool = False,
         allow_stale_index: bool = False,
     ) -> None:
         self.root = root.resolve()
@@ -40,7 +41,7 @@ class ClipRetriever:
             self.refs,
             self.metadata,
             set(self.groups),
-            False,
+            require_keyframes,
             self.registry_path,
             self.root,
             allow_stale_index,

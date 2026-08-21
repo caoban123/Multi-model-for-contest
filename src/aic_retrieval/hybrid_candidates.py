@@ -91,6 +91,8 @@ class StructuredCandidateGenerator:
                 payload = self.object_service.search(
                     ObjectPredicate(constraint.labels, constraint.count_operator, constraint.count, constraint.horizontal, constraint.vertical),
                     ObjectSearchConfig(constraint.min_confidence, constraint.nms_iou_threshold),
+                    ({(video_id, keyframe_id) for video_id, keyframe_id in candidates if keyframe_id != -1} or None)
+                    if query.restrict_structured_to_clip_candidates else None,
                 )
                 matched_keys = {(item["video_id"], item["keyframe_id"]) for item in payload["results"]}
                 unknown_object_keys.update((item["video_id"], item["keyframe_id"]) for item in payload["unknown_frames"])

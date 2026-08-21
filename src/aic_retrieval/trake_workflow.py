@@ -182,6 +182,7 @@ class TrakeWorkflow:
         raw_by_event: dict[str, list[dict[str, Any]]] | None = None
         request_stage_timings: dict[str, float] = {}
         request_query_plans: dict[str, dict[str, Any]] = {}
+        request_query_traces: dict[str, dict[str, Any]] = {}
         hybrid_failures: dict[str, dict[str, str]] = {}
         skipped_without_frame: dict[str, dict[str, int]] = {}
         pool_sizes = {event.event_id: event_pool_size for event in state.request.events}
@@ -190,6 +191,7 @@ class TrakeWorkflow:
             raw_by_event = self.request_retriever(state.request, retrieval_limit)
             request_stage_timings = dict(getattr(raw_by_event, "stage_timings_ms", {}))
             request_query_plans = dict(getattr(raw_by_event, "query_plans", {}))
+            request_query_traces = dict(getattr(raw_by_event, "query_traces", {}))
             hybrid_failures = dict(getattr(raw_by_event, "hybrid_failures", {}))
             skipped_without_frame = dict(getattr(raw_by_event, "skipped_without_frame", {}))
             if self.runtime_config.retrieval.adaptive_topk and self.runtime_config.features.adaptive_topk and not explicit_pool_size:
@@ -236,6 +238,7 @@ class TrakeWorkflow:
         state.diagnostics["retrieval"] = {
             "hybrid_requested": bool(state.request.constraints.get("hybrid_retrieval")),
             "hybrid_query_plans": request_query_plans,
+            "hybrid_query_traces": request_query_traces,
             "hybrid_failures": hybrid_failures,
             "hybrid_skipped_without_frame": skipped_without_frame,
             "adaptive_topk": self.runtime_config.retrieval.adaptive_topk and self.runtime_config.features.adaptive_topk and not explicit_pool_size,

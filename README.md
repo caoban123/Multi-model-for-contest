@@ -4,12 +4,12 @@
 
 > Read this section first. Older sections below are retained as historical phase notes and may describe earlier limitations.
 
-The repository now contains a working L21-focused video retrieval system with CLIP, opt-in BGE/FAISS and BM25 retrieval, Agent routing, evidence-grounded Q&A, TRAKE temporal alignment, and a guarded official submission workspace for KIS/Q&A/TRAKE. CLIP remains the default because the current partial benchmark does not justify promoting always-on Hybrid Retrieval.
+The repository now contains a working L21-L30 retrieval system with CLIP, opt-in BGE/FAISS and BM25 retrieval, intent-aware Agent routing, evidence-grounded Q&A, L21 TRAKE temporal alignment, and a guarded official submission workspace for KIS/Q&A/TRAKE. CLIP remains the visual default; BGE and BM25 are selected only for semantic-text and lexical intent, and RRF is used only when multiple evidence sources are required.
 
 Latest comprehensive report:
 
 ```text
-reports/Phase_9_21-08-2026_7.md
+reports/Phase_9_21-08-2026_9.md
 ```
 
 High-level status:
@@ -19,17 +19,17 @@ High-level status:
 | Data registry | Implemented | `artifacts/registry/data_registry.json` describes local assets. |
 | CLIP NumPy index | Implemented | L21 index is expected at `artifacts/indexes/l21_numpy`. |
 | Retrieval UI | Implemented | Visual search, metadata search, Agent workspace, pins, history, raw video preview, keyframe neighborhood viewer. |
-| Agent query routing | Implemented, opt-in | Separate CLIP-English, BGE semantic and BM25 lexical queries with raw/parsed/validated Gemini trace and local fallback. |
-| Structured retrieval | Implemented, opt-in | CLIP + objects + metadata + attributes + OCR/ASR via `/api/structured-search`. |
+| Agent query routing | Implemented, opt-in | CLIP for visual, BGE for semantic text, BM25 for exact/lexical text; local guardrails normalize Gemini routes and RRF is conditional. |
+| Structured retrieval | Implemented, opt-in | Explicit object/color/OCR/ASR/metadata constraints can rerank a bounded candidate pool; full-store structured search remains available via `/api/structured-search`. |
 | Object store | Built and audited | L21 remains local; full L21-L30 is at `E:\AIC2026\artifacts\structured\l21_l30_objects.sqlite` with 177,321 frames and 17,732,100 detections. |
 | Attribute/color evidence | Implemented | Useful for constraints such as red shirt or white car. |
 | Phase 5 ASR/OCR | Partially useful | ASR has 563 transcript segments. OCR JSONL exists but current detections are empty. |
 | Phase 6 reranker/planner | Implemented | Local query planner/reranker config exists at `configs/phase6_reranker_v1.json`. |
-| Phase 7 Q&A | Implemented | Evidence-first Q&A, manual review, SQLite session store, export record flow. |
+| Phase 7 Q&A | Implemented | `/submission` now runs prepare, evidence selection, optional Gemini answer, review and queue import directly. |
 | Gemini Q&A/VLM | Implemented as option | `Draft with Gemini` sends selected evidence plus related keyframe images to Gemini. |
-| Phase 8 TRAKE | Implementation complete; quality pending | Local plan/retrieve/temporal-align, `/trake` workspace, SQLite review, internal export and selected-event refinement exist; manual development/holdout labels are pending. |
-| Phase 9 submission workflow | Implemented, guarded | `/submission` has rich Agent candidate cards, Gemini trace, SQLite queue, official KIS/Q&A/TRAKE CSV, validation and `submission.zip`. Official frame IDs require manual/BTC-certified mapping. |
-| FAISS/vector DB | Implemented, opt-in | BGE-M3 FAISS index covers 8,322 L21 text documents; it does not replace the CLIP NumPy baseline. |
+| Phase 8 TRAKE | Implementation complete for L21; quality pending | `/submission` now runs plan, search, align, chain review and queue import directly; retrieval is hard-scoped to L21. |
+| Phase 9 submission workflow | Implemented, guarded | `/submission` has Agent traces, zoomable frame inspector, radius 3/6/12/20 neighborhoods, copy details, direct KIS/Q&A/TRAKE review, SQLite queue, validation and `submission.zip`. |
+| FAISS/vector DB | Implemented, opt-in | Full BGE-M3 FAISS IndexFlatIP covers 173,393 L21-L30 text documents at 1,024 dimensions. |
 | BM25 | Implemented, opt-in | L21 remains local; full L21-L30 FTS5 index on E covers 173,393 documents and has passed integrity/search audits. |
 
 Full-data staging status:
@@ -37,7 +37,7 @@ Full-data staging status:
 - L21-L30 are normalized under `E:\AIC2026\data` and exposed through the `D:\AIC1\data` Junction.
 - The full registry covers 873 videos and 177,321 aligned CLIP/mapping/keyframe/object frames with zero validation errors.
 - Full CLIP NumPy is ready and audited at `E:\AIC2026\artifacts\indexes\l21_l30_numpy`; the old L21-only index remains stale against the newly downloaded feature source.
-- Full object SQLite, 173,393-document text corpus and BM25 index are built and independently audited. Full BGE/FAISS is pending with a resumable checkpoint builder. Large full-data artifacts belong under `E:\AIC2026\artifacts`; see `reports/Phase_9_21-08-2026_7.md` for the next command.
+- Full object SQLite, 173,393-document text corpus, BM25 and BGE/FAISS indexes are built and independently audited. Large full-data artifacts remain under `E:\AIC2026\artifacts`; see `reports/Phase_9_21-08-2026_9.md`.
 
 Current important local artifacts:
 
@@ -66,16 +66,21 @@ $env:AIC_TRANSLATION_PROVIDER="gemini"
 $env:AIC_TRANSLATION_MODEL="gemini-3.5-flash"
 
 python tools\retrieval_ui.py `
-  --registry artifacts\registry\data_registry.json `
-  --index-dir artifacts\indexes\l21_numpy `
-  --groups L21 `
+  --registry artifacts\registry\data_registry_l21_l30.json `
+  --index-dir E:\AIC2026\artifacts\indexes\l21_l30_numpy `
+  --metadata-dir E:\AIC2026\data\media-info `
+  --object-store E:\AIC2026\artifacts\structured\l21_l30_objects.sqlite `
+  --object-aliases config\object_aliases_v1.json `
+  --groups L21,L22,L23,L24,L25,L26,L27,L28,L29,L30 `
   --clip-local-files-only `
+  --require-keyframes `
   --enable-hybrid-retrieval `
-  --bge-index-dir artifacts\indexes\l21_bge `
+  --bge-index-dir E:\AIC2026\artifacts\indexes\l21_l30_bge `
   --bge-model-path $env:AIC_BGE_MODEL_PATH `
-  --bm25-index-dir artifacts\indexes\l21_bm25 `
+  --bm25-index-dir E:\AIC2026\artifacts\indexes\l21_l30_bm25 `
   --phase5-store artifacts\phase5\phase5_store.sqlite `
-  --qa-store artifacts\qa\phase7_qa.sqlite3
+  --qa-store artifacts\qa\phase7_qa.sqlite3 `
+  --trake-store artifacts\trake\phase8_trake.sqlite3
 ```
 
 Open:
@@ -90,7 +95,7 @@ Current test status:
 
 ```text
 python -m pytest -q
-348 passed
+354 passed
 ```
 
 Known limitations:
@@ -98,8 +103,8 @@ Known limitations:
 - OCR is not yet useful on current L21 artifact because all OCR detections are empty.
 - Hybrid Retrieval remains opt-in; CLIP remains the verified default visual baseline.
 - Gemini VLM answer drafting requires Internet and a configured Gemini API key.
-- Gemini structured-filter output is a reviewed suggestion: use `Use in Structured Search` to load it, then review and run Visual Structured Search. It is not silently applied to the Agent result ranking.
-- OCR currently has zero usable documents and ASR covers only 2/29 L21 videos.
+- Explicit Gemini/local structured constraints are applied as bounded candidate reranking in Agent search; failure or zero support preserves the base retriever ranking.
+- OCR currently has zero usable documents and ASR covers only 2/873 videos in the full registry.
 - Phase 8 TRAKE core is implemented for L21; quality/holdout verification is pending manual labels. See `docs/PHASE8_TESTING.md`.
 - Automatic official `frame_id` mapping is intentionally blocked. The submission UI requires a manually verified official frame ID or a future BTC-certified mapping.
 
@@ -599,9 +604,9 @@ See [`docs/PHASE9_SUBMISSION_HARDENING.md`](docs/PHASE9_SUBMISSION_HARDENING.md)
 
 ## Phase 9 Current - Hybrid Retrieval and Submission Agent
 
-Phase 9 adds modular BGE-M3/FAISS and BM25 retrievers without replacing CLIP. The Agent chooses a visible opt-in route per query and falls back to deterministic local planning when Gemini is unavailable. Visual/KIS and Q&A use video-level RRF; TRAKE keeps frame-level event fusion so temporal alignment still receives moments rather than video-only hits.
+Phase 9 adds modular BGE-M3/FAISS and BM25 retrievers without replacing CLIP. The Agent routes visual queries to CLIP, semantic text to BGE, exact/keyword text to BM25, and uses RRF only for mixed queries or explicit structured support. Gemini output is visible but is normalized by deterministic local guardrails before execution.
 
-The separate `/submission` workspace stores an ACTIVE session and confirmed query queue in SQLite. KIS can run Agent retrieval directly. Q&A and TRAKE import only reviewed workflow outputs. All three tasks require a manually verified official frame ID until a BTC mapping is certified.
+The separate `/submission` workspace stores an ACTIVE session and confirmed query queue in SQLite. KIS runs Agent retrieval directly. Q&A runs evidence preparation, selected-evidence answer drafting and review in the same page. TRAKE runs plan, search, temporal alignment and chain review in the same page. All three tasks still require manually verified official frame IDs until a BTC mapping is certified.
 
 Official output rules enforced by code:
 
@@ -612,9 +617,9 @@ Official output rules enforced by code:
 - ZIP entries are always under `submission/`.
 - Score, rank, provenance, keyframe ID and timestamp cannot enter the official writer.
 
-Use `/submission` to Start, retrieve/import, review nearby frames, enter verified official frame IDs, Confirm, Validate, Done and download `submission.zip`. Session files are written under `artifacts/submissions/` and are not committed.
+Use `/submission` to Start, run a task, inspect full-size images, browse neighboring frames at radius 3/6/12/20, review evidence or chains, enter verified official frame IDs, Confirm, Validate, Done and download `submission.zip`. Session files are written under `artifacts/submissions/` and are not committed.
 
 Latest implementation plan and report:
 
 - [`plan/11_PHASE_9_SUBMISSION_AGENT_UI_REPLAN.md`](plan/11_PHASE_9_SUBMISSION_AGENT_UI_REPLAN.md)
-- [`reports/Phase_9_20-08-2026_9.md`](reports/Phase_9_20-08-2026_9.md)
+- [`reports/Phase_9_21-08-2026_9.md`](reports/Phase_9_21-08-2026_9.md)

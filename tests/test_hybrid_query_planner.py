@@ -21,7 +21,8 @@ def test_local_planner_routes_visual_and_exact_date_differently() -> None:
     assert visual.enabled_retrievers == ("clip",)
     assert visual.intent == "visual"
     date = planner.plan("video xuất bản ngày 31 tháng 8 năm 2024")
-    assert "bm25" in date.enabled_retrievers
+    assert date.enabled_retrievers == ("bm25",)
+    assert date.fusion_method == "none"
     assert date.lexical_text_query.endswith("2024")
     assert date.source_filters["bm25"] == ("metadata",)
 
@@ -33,8 +34,19 @@ def test_local_planner_marks_asr_and_ocr_coverage() -> None:
     assert any("ASR" in warning for warning in asr.warnings)
     assert asr.source_filters["bm25"] == ("asr",)
     ocr = planner.plan('biển hiệu chữ "Samsung"')
-    assert "bm25" in ocr.enabled_retrievers
+    assert ocr.enabled_retrievers == ("bm25",)
     assert any("OCR" in warning for warning in ocr.warnings)
+
+
+def test_local_planner_uses_bge_for_semantic_text_and_rrf_only_for_mixed_queries() -> None:
+    planner = LocalHybridQueryPlanner()
+    semantic = planner.plan("news report about land subsidence")
+    assert semantic.enabled_retrievers == ("bge",)
+    assert semantic.fusion_method == "none"
+
+    mixed = planner.plan('người nói "xin chào"')
+    assert mixed.enabled_retrievers == ("clip", "bge", "bm25")
+    assert mixed.fusion_method == "rrf"
 
 
 def test_gemini_payload_is_compact_and_parser_validates_routes() -> None:
@@ -121,3 +133,31 @@ def test_configured_gemini_exposes_safe_raw_parsed_and_validated_trace(monkeypat
     assert trace["validated_plan"]["structured_filter_suggestions"]["object_label"] == "car"
     assert "secret-that-must-not-leak" not in json.dumps(trace)
     assert "a red car on a city street" in trace["raw_text"]
+
+
+def test_gemini_routes_are_normalized_by_local_intent_guardrails(monkeypatch) -> None:
+    response_payload = _gemini_response(
+        {
+            "clip_query": "news report about land subsidence",
+            "semantic_query": "news report about land subsidence",
+            "lexical_query": "land subsidence",
+            "intent": "mixed",
+            "routes": ["clip", "bge", "bm25"],
+            "reasons": ["model requested every route"],
+            "structured_filters": {},
+        }
+    )
+
+    class FakeResponse:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def read(self) -> bytes: return json.dumps(response_payload).encode("utf-8")
+
+    monkeypatch.setattr("aic_retrieval.hybrid_query_planner.request.urlopen", lambda *_args, **_kwargs: FakeResponse())
+    planner = HybridQueryPlanner(TranslationConfig(provider="gemini", api_key="x", api_url="https://example.invalid", model="gemini-test"))
+
+    result = planner.plan_with_trace("news report about land subsidence")
+
+    assert result.trace.parsed_output["routes"] == ["clip", "bge", "bm25"]
+    assert result.plan.enabled_retrievers == ("bge",)
+    assert result.plan.fusion_method == "none"

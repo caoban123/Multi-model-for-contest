@@ -17,7 +17,12 @@ def test_submission_workspace_exposes_guarded_kis_flow() -> None:
     assert "/api/submission/import/qa" in app
     assert "/api/submission/import/trake" in app
     assert 'value="QA"' in html and 'value="TRAKE"' in html
-    assert 'id="workflow-session-id"' in html
+    for item in ('id="qa-question"', 'id="task-workflow"', 'id="workflow-content"', 'id="image-dialog"'):
+        assert item in html
+    for route in ("/api/qa/prepare", "/api/qa/draft-answer", "/api/qa/review", "/api/trake/plan", "/api/trake/search", "/api/trake/align", "/api/trake/review"):
+        assert route in app
+    assert "data-radius" in app
+    assert "showModal" in app
     for item in ('id="agent-inspector"', 'id="gemini-state"', 'id="gemini-raw"', 'id="gemini-parsed"', 'id="validated-plan"'):
         assert item in html
     assert "agent_trace" in app
@@ -26,5 +31,5 @@ def test_submission_workspace_exposes_guarded_kis_flow() -> None:
 
 def test_submission_workspace_has_responsive_candidate_and_validation_styles() -> None:
     css = (ROOT / "web/submission_ui/styles.css").read_text(encoding="utf-8")
-    for selector in (".workspace", ".candidate", ".neighbors", ".validation-summary", "@media (max-width: 680px)"):
+    for selector in (".workspace", ".candidate", ".neighbors", ".task-workflow", ".image-dialog", ".trake-chain", ".validation-summary", "@media (max-width: 680px)"):
         assert selector in css

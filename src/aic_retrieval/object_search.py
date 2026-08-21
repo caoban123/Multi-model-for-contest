@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import math
 import sqlite3
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from aic_retrieval.object_store import AliasDictionary
+from aic_retrieval.object_store import AliasDictionary, detection_rows
 
 LEFT_CENTER_BOUNDARY = 0.33
 CENTER_RIGHT_BOUNDARY = 0.66
@@ -107,23 +108,40 @@ def row_to_detection(row: sqlite3.Row) -> Detection:
 
 
 class ObjectSearchService:
-    def __init__(self, store_path: Path, aliases: AliasDictionary) -> None:
+    def __init__(self, store_path: Path, aliases: AliasDictionary, object_root: Path | None = None) -> None:
         self.store_path = store_path
         self.aliases = aliases
+        self.object_root = object_root
 
-    def search(self, predicate: ObjectPredicate, config: ObjectSearchConfig = ObjectSearchConfig()) -> dict[str, Any]:
+    def search(
+        self,
+        predicate: ObjectPredicate,
+        config: ObjectSearchConfig = ObjectSearchConfig(),
+        candidate_keys: set[tuple[str, int]] | None = None,
+    ) -> dict[str, Any]:
         if not 0 <= config.min_confidence <= 1:
             raise ValueError("min_confidence must be between 0 and 1")
         query = canonical_predicate(predicate, self.aliases)
+        if candidate_keys is not None and self.object_root is not None:
+            return self._search_candidate_files(query, config, candidate_keys)
         connection = sqlite3.connect(self.store_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA temp_store=MEMORY")
+        if candidate_keys is not None:
+            connection.execute("CREATE TEMP TABLE candidate_frames (video_id TEXT NOT NULL, keyframe_id INTEGER NOT NULL, PRIMARY KEY(video_id,keyframe_id)) WITHOUT ROWID")
+            connection.executemany("INSERT INTO candidate_frames VALUES (?,?)", sorted(candidate_keys))
         placeholders = ",".join("?" for _ in query.labels)
+        detection_source = (
+            "candidate_frames c JOIN detections d INDEXED BY idx_detections_frame ON d.video_id=c.video_id AND d.keyframe_id=c.keyframe_id"
+            if candidate_keys is not None else "detections d"
+        )
         rows = connection.execute(
-            f"SELECT video_id,keyframe_id,label_raw,label_normalized,confidence,bbox_y1,bbox_x1,bbox_y2,bbox_x2,center_x,center_y,area FROM detections WHERE label_normalized IN ({placeholders}) AND confidence >= ? ORDER BY video_id,keyframe_id,confidence DESC,label_raw",
+            f"SELECT d.video_id,d.keyframe_id,d.label_raw,d.label_normalized,d.confidence,d.bbox_y1,d.bbox_x1,d.bbox_y2,d.bbox_x2,d.center_x,d.center_y,d.area FROM {detection_source} WHERE d.label_normalized IN ({placeholders}) AND d.confidence >= ? ORDER BY d.video_id,d.keyframe_id,d.confidence DESC,d.label_raw",
             (*query.labels, config.min_confidence),
         ).fetchall()
-        unknown_rows = connection.execute("SELECT video_id,keyframe_id FROM frames WHERE object_status='UNKNOWN' ORDER BY video_id,keyframe_id").fetchall()
-        available_rows = connection.execute("SELECT video_id,keyframe_id FROM frames WHERE object_status='AVAILABLE' ORDER BY video_id,keyframe_id").fetchall()
+        frame_source = "candidate_frames c JOIN frames f ON f.video_id=c.video_id AND f.keyframe_id=c.keyframe_id" if candidate_keys is not None else "frames f"
+        unknown_rows = connection.execute(f"SELECT f.video_id,f.keyframe_id FROM {frame_source} WHERE f.object_status='UNKNOWN' ORDER BY f.video_id,f.keyframe_id").fetchall()
+        available_rows = connection.execute(f"SELECT f.video_id,f.keyframe_id FROM {frame_source} WHERE f.object_status='AVAILABLE' ORDER BY f.video_id,f.keyframe_id").fetchall()
         connection.close()
         grouped: dict[tuple[str, int], list[Detection]] = {}
         for row in rows:
@@ -150,6 +168,56 @@ class ObjectSearchService:
             "predicate": asdict(query), "config": asdict(config), "results": results,
             "unknown_frames": [{"video_id": row["video_id"], "keyframe_id": row["keyframe_id"], "data_status": "UNKNOWN"} for row in unknown_rows],
             "unknown_count": len(unknown_rows), "no_match_semantics": "AVAILABLE frames omitted from results are NO_MATCH",
+        }
+
+    def _search_candidate_files(
+        self,
+        query: ObjectPredicate,
+        config: ObjectSearchConfig,
+        candidate_keys: set[tuple[str, int]],
+    ) -> dict[str, Any]:
+        assert self.object_root is not None
+        results: list[dict[str, Any]] = []
+        unknown_frames: list[dict[str, Any]] = []
+        for video_id, keyframe_id in sorted(candidate_keys):
+            path = self.object_root / video_id / f"{keyframe_id:03d}.json"
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                detections = [
+                    Detection(row[3], row[4], *row[5:13])
+                    for row in detection_rows(video_id, keyframe_id, payload, self.aliases)
+                    if row[4] in query.labels and row[5] >= config.min_confidence
+                ]
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+                unknown_frames.append({"video_id": video_id, "keyframe_id": keyframe_id, "data_status": "UNKNOWN"})
+                continue
+            filtered = [item for item in nms(detections, config.nms_iou_threshold) if position_matches(item, query.horizontal, query.vertical)]
+            if not count_matches(len(filtered), query.count_operator, query.count):
+                continue
+            score = max((item.confidence for item in filtered), default=0.0)
+            results.append({
+                "video_id": video_id,
+                "keyframe_id": keyframe_id,
+                "matched_labels": sorted({item.label_normalized for item in filtered}),
+                "confidence": score,
+                "bounding_boxes": [[item.bbox_y1, item.bbox_x1, item.bbox_y2, item.bbox_x2] for item in filtered],
+                "object_score": score,
+                "data_status": "MATCH",
+                "matched_count": len(filtered),
+                "detections": [asdict(item) for item in filtered],
+            })
+        results.sort(key=lambda item: (-item["object_score"], item["video_id"], item["keyframe_id"]))
+        for rank, item in enumerate(results, start=1):
+            item["object_rank"] = rank
+        return {
+            "predicate": asdict(query),
+            "config": asdict(config),
+            "results": results,
+            "unknown_frames": unknown_frames,
+            "unknown_count": len(unknown_frames),
+            "no_match_semantics": "AVAILABLE frames omitted from results are NO_MATCH",
+            "candidate_scope": len(candidate_keys),
+            "source": "frame_json_candidate_scan",
         }
 
     def video_data_status(self, video_id: str) -> dict[str, int | str]:

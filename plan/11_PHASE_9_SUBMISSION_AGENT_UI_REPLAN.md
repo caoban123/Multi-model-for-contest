@@ -30,7 +30,7 @@ Nguyên tắc quan trọng nhất: **retrieval/debug output và official BTC sub
 - Q&A đã có workspace, evidence selection, answer review, Gemini option, SQLite store và export nội bộ.
 - TRAKE Phase 8 vừa merge, đã có `/trake`, planner, search, align, review/export nội bộ.
 - Phase 9 hiện có internal schema `aic-internal-submission-v1`, validator cơ bản và Q&A export adapter.
-- Chưa có UI thống nhất để gom nhiều query thành một `submission.zip` đúng format BTC.
+- Đã có UI thống nhất tại `/submission` để chạy, review và gom nhiều query thành `submission.zip` đúng format BTC.
 - Điểm rủi ro lớn nhất vẫn là mapping giữa `keyframe_id`, `frame_idx`, `timestamp` và **official frame_id**.
 
 ## BTC format cần hỗ trợ
@@ -750,7 +750,9 @@ Quyết định sau H6:
 | Full object SQLite | `VERIFIED` | 177,321 available frames, 17,732,100 detections, SQLite quick check `ok` |
 | Full deterministic text corpus | `VERIFIED` | 173,393 unique documents; SHA-256, JSONL, mapping and source-count audit pass |
 | Full BM25 index | `VERIFIED` | 173,393 SQLite/FTS rows; checksum, integrity, group filter and multilingual search smokes pass |
-| Full BGE/FAISS index | `NEXT_RESUMABLE` | 512-document checkpoints, atomic publish and batched FAISS construction are verified |
+| Full BGE/FAISS index | `VERIFIED_OPT_IN` | 173,393 x 1,024 `IndexFlatIP` vectors; FAISS and corpus SHA-256 pass; multilingual runtime smoke passes |
+| Full BM25/BGE/RRF smoke | `VERIFIED_KEEP_OPT_IN` | BM25 MRR 0.9375, BGE MRR 0.8281, and equal-weight BGE+BM25 RRF MRR 0.8750 on 8 judged text queries |
+| Full CLIP/BGE/BM25 ablation | `NEEDS_MULTIMODAL_JUDGMENTS` | Seven profiles execute, but the current text-source filters suppress CLIP hits and cannot support a CLIP promotion decision |
 
 The full-data rollout does not change the retrieval default. CLIP remains the baseline and the L21-L30 BM25/BGE channels stay opt-in until new benchmark and ablation evidence passes the promotion gate.
 
@@ -1237,3 +1239,33 @@ Và ZIP cuối cùng phải đúng format BTC:
 - KIS/Q&A/TRAKE đúng số cột.
 - Không leak debug fields.
 - Dùng official `frame_id`, không dùng nhầm `keyframe_id` hoặc timestamp.
+
+## Implementation Update - 21-08-2026
+
+Milestone hiện tại đã triển khai:
+
+- Intent routing: visual -> CLIP, semantic text -> BGE, lexical/exact -> BM25.
+- Gemini plan phải qua deterministic guardrail; không được tự bật cả ba retriever nếu intent không cần.
+- RRF chỉ chạy khi có nhiều retriever thành công hoặc có structured evidence thực sự hỗ trợ.
+- Structured object/color/OCR/ASR/metadata là candidate rerank fail-open; không có support hoặc lỗi thì giữ nguyên baseline.
+- Object constraint trên full store dùng JSON candidate scan thay vì quét 17,7 triệu detection trong SQLite.
+- `/submission` có direct Q&A prepare -> evidence -> draft -> review -> queue.
+- `/submission` có direct TRAKE plan -> search -> align -> chain review -> queue; Phase 8 vẫn khóa L21.
+- Candidate, Q&A evidence và TRAKE event đều có full-size frame inspector.
+- Neighborhood viewer có radius 3/6/12/20, điều hướng ảnh bằng phím trái/phải và copy frame details.
+- Manual official frame ID gate vẫn được giữ nguyên cho cả ba task.
+
+Bằng chứng runtime:
+
+- Full health: 177.321 CLIP vectors, 873 metadata documents, CLIP/BGE/BM25 configured.
+- `person wearing a red shirt`: CLIP + object/attribute structured support, 30 candidates, radius-20 neighborhood có 25/25 ảnh.
+- Candidate object scan Top-120: 0,08-0,14 giây thay cho khoảng 40 giây với candidate-scoped SQLite.
+- TRAKE smoke: 2 events, 1 valid chain tại `L21_V011`, zero non-L21 candidates.
+- Full automated suite: 354 passed.
+
+Chưa đóng quality gate:
+
+- Chưa có benchmark visual/semantic/lexical/mixed đủ lớn để promote Hybrid thành default toàn cục.
+- OCR chưa có document hữu dụng; ASR chỉ phủ 2/873 video.
+- TRAKE chưa có development/holdout labels đủ để tuyên bố quality.
+- Official BTC frame mapping vẫn cần xác nhận ngoài retrieval diagnostics.
