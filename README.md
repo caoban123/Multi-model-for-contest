@@ -1,15 +1,35 @@
 # Multi-model for AIC Video Retrieval
 
-## Current Snapshot - 2026-08-21
+## Current Snapshot - 2026-09-02
 
 > Read this section first. Older sections below are retained as historical phase notes and may describe earlier limitations.
 
-The repository now contains a working L21-L30 retrieval system with CLIP, opt-in BGE/FAISS and BM25 retrieval, intent-aware Agent routing, evidence-grounded Q&A, L21 TRAKE temporal alignment, and a guarded official submission workspace for KIS/Q&A/TRAKE. CLIP remains the visual default; BGE and BM25 are selected only for semantic-text and lexical intent, and RRF is used only when multiple evidence sources are required.
+The repository now contains a working L21-L30 retrieval system with CLIP, opt-in BGE/FAISS and BM25 retrieval, intent-aware Agent routing, evidence-grounded Q&A, L21 TRAKE temporal alignment, and a guarded official submission workspace for KIS/Q&A/TRAKE. CLIP remains the visual default; BGE and BM25 are selected only for semantic-text and lexical intent, and RRF is used only when multiple evidence sources are required. Long visual narratives are split into at most six bounded CLIP prompts; visible counts such as `5 people` no longer activate BM25 unless the query explicitly asks for on-screen text or an exact number. Multi-query KIS review keeps the leading RRF consensus, surfaces the strongest videos from each event lane, and adds an advisory Sequence lane for videos whose event frames occur in the requested time order.
 
 Latest comprehensive report:
 
 ```text
-reports/Phase_9_21-08-2026_9.md
+reports/Phase_10_02-09-2026_1.md
+```
+
+### Recent Improvements
+
+- Added a checked L21-L30 competition launcher with fail-fast validation for registry, CLIP, BGE, BM25, Phase 5 stores, local model paths and external SSD data.
+- Integrated the consolidated L21-L30 OCR corpus into Phase 5, BM25 and BGE retrieval while preserving partial-ASR warnings instead of treating missing speech data as negative evidence.
+- Added modular CLIP visual, BGE semantic-text and BM25 lexical retrieval with intent-aware routing and RRF only when a query genuinely needs multiple evidence sources.
+- Improved long-query planning with up to six bounded CLIP prompts, visual-count guardrails, event lanes and an advisory temporal Sequence lane that exposes ordered frame evidence.
+- Added bounded frame localization inside retrieved videos, optional decoded-video dense search, cache reuse, contact-sheet review, zoom and nearby-frame navigation for KIS and Q&A.
+- Added allowlisted Gemini visual review for Q&A frames and low-confidence TRAKE chains. Gemini may reorder supplied evidence but cannot invent video or frame IDs.
+- Expanded `/submission` with Agent traces, retriever provenance, KIS/Q&A/TRAKE review tools, editable per-query CSV previews, multiple queued results, individual downloads and guarded final submission export.
+- Added resilient reads for data/index files on external Windows drives and deterministic OCR-noise suppression for BGE/BM25 candidate generation.
+- Verified the cumulative implementation with `439` automated tests. Accuracy promotion remains gated by labelled development queries and holdout evaluation.
+
+Current quality plan and foundation report:
+
+```text
+plan/13_PHASE_10_QA_TRAKE_QUALITY_UPGRADE.md
+plan/14_PHASE_10B_FRAME_LOCALIZATION_VLM_INDEX_UPGRADE.md
+reports/Phase_10_22-08-2026_2.md
 ```
 
 High-level status:
@@ -19,25 +39,26 @@ High-level status:
 | Data registry | Implemented | `artifacts/registry/data_registry.json` describes local assets. |
 | CLIP NumPy index | Implemented | L21 index is expected at `artifacts/indexes/l21_numpy`. |
 | Retrieval UI | Implemented | Visual search, metadata search, Agent workspace, pins, history, raw video preview, keyframe neighborhood viewer. |
-| Agent query routing | Implemented, opt-in | CLIP for visual, BGE for semantic text, BM25 for exact/lexical text; local guardrails normalize Gemini routes and RRF is conditional. |
+| Agent query routing | Implemented, opt-in | CLIP for visual, BGE for semantic text, BM25 for exact/lexical text; long visual narratives can produce up to six CLIP subqueries, and RRF remains conditional. Numeric object/person counts remain visual rather than lexical. |
 | Structured retrieval | Implemented, opt-in | Explicit object/color/OCR/ASR/metadata constraints can rerank a bounded candidate pool; full-store structured search remains available via `/api/structured-search`. |
-| Object store | Built and audited | L21 remains local; full L21-L30 is at `E:\AIC2026\artifacts\structured\l21_l30_objects.sqlite` with 177,321 frames and 17,732,100 detections. |
+| Object store | Baseline built; v2 builder ready | The full baseline has 17,732,100 detections (100/frame). The builder now supports opt-in confidence, per-label NMS and frame Top-N filtering; the 4.6 GB v2 store still needs a long rebuild and benchmark. |
 | Attribute/color evidence | Implemented | Useful for constraints such as red shirt or white car. |
-| Phase 5 ASR/OCR | Partially useful | ASR has 563 transcript segments. OCR JSONL exists but current detections are empty. |
+| Phase 5 ASR/OCR | OCR ready; ASR partial | Consolidated OCR has 845,478 searchable detections across 873/873 videos. ASR preserves 563 transcript segments across 2/873 videos. |
 | Phase 6 reranker/planner | Implemented | Local query planner/reranker config exists at `configs/phase6_reranker_v1.json`. |
-| Phase 7 Q&A | Implemented | `/submission` now runs prepare, evidence selection, optional Gemini answer, review and queue import directly. |
-| Gemini Q&A/VLM | Implemented as option | `Draft with Gemini` sends selected evidence plus related keyframe images to Gemini. |
-| Phase 8 TRAKE | Implementation complete for L21; quality pending | `/submission` now runs plan, search, align, chain review and queue import directly; retrieval is hard-scoped to L21. |
+| Phase 7 Q&A | Implemented, Phase 10B opt-in | `/submission` adds bounded Stage-B keyframe rescoring and decoded-video dense localization inside Stage-A videos, a 12-frame shortlist, nearby-frame inspection and optional allowlisted Gemini frame reranking. Video rank is preserved. |
+| Gemini Q&A/VLM | Implemented as option | Gemini can draft from selected multimodal evidence and images or rerank only frames already generated by the system. API failure preserves the local baseline. |
+| Phase 8 TRAKE | Implemented; quality pending | Event planning, same-video monotonic alignment, alternate/replace/refine tools, decoded-video refinement and conditional Gemini chain verification are available. Gemini is advisory only and cannot invent or replace frames. |
 | Phase 9 submission workflow | Implemented, guarded | `/submission` has Agent traces, zoomable frame inspector, radius 3/6/12/20 neighborhoods, copy details, direct KIS/Q&A/TRAKE review, SQLite queue, validation and `submission.zip`. |
-| FAISS/vector DB | Implemented, opt-in | Full BGE-M3 FAISS IndexFlatIP covers 173,393 L21-L30 text documents at 1,024 dimensions. |
-| BM25 | Implemented, opt-in | L21 remains local; full L21-L30 FTS5 index on E covers 173,393 documents and has passed integrity/search audits. |
+| Phase 10 Q&A/TRAKE quality | Dense v2 verified, opt-in | KIS/Q&A/TRAKE can decode bounded neighborhoods from source video, score them with CLIP, cache exact decoded frames and expose a contact sheet for manual review. Accuracy promotion still waits for manual development/holdout labels. |
+| FAISS/vector DB | Implemented, competition-ready | BGE-M3 FAISS IndexFlatIP v2 covers the OCR-enriched 292,488-document L21-L30 corpus and passes the competition preflight. |
+| BM25 | Implemented, opt-in | OCR-enriched L21-L30 FTS5 v2 covers 292,488 documents and has passed integrity/search audits. |
 
 Full-data staging status:
 
 - L21-L30 are normalized under `E:\AIC2026\data` and exposed through the `D:\AIC1\data` Junction.
 - The full registry covers 873 videos and 177,321 aligned CLIP/mapping/keyframe/object frames with zero validation errors.
 - Full CLIP NumPy is ready and audited at `E:\AIC2026\artifacts\indexes\l21_l30_numpy`; the old L21-only index remains stale against the newly downloaded feature source.
-- Full object SQLite, 173,393-document text corpus, BM25 and BGE/FAISS indexes are built and independently audited. Large full-data artifacts remain under `E:\AIC2026\artifacts`; see `reports/Phase_9_21-08-2026_9.md`.
+- Consolidated OCR from `E:\data\consolidated_L21_L30\consolidated_L21_L30` has been mapped to official retrieval refs and imported into a validated Phase 5 SQLite store. The OCR-enriched corpus, BM25 v2 and BGE v2 live under `E:\AIC2026\artifacts` and contain 292,488 aligned text documents.
 
 Current important local artifacts:
 
@@ -54,9 +75,46 @@ artifacts/phase5/phase5_store.sqlite
 artifacts/phase5/stores/phase5_l21.sqlite3
 artifacts/qa/phase7_qa.sqlite3
 artifacts/submissions/
+artifacts/audits/phase10_data_capability.json
+artifacts/audits/phase10_qa_modality_coverage.json
+artifacts/audits/phase10_trake_refinement_coverage.json
+E:\AIC2026\artifacts\phase5\l21_l30_phase5.sqlite3
+E:\AIC2026\artifacts\phase5\l21_l30_phase5_manifest.json
+E:\AIC2026\artifacts\corpora\l21_l30_text_v2\
+E:\AIC2026\artifacts\indexes\l21_l30_bm25_v2\
+E:\AIC2026\artifacts\indexes\l21_l30_bge_v2\
+E:\AIC2026\artifacts\cache\dense_frames\
+artifacts/audits/phase10_upgrade_audit.json
 ```
 
-Run the UI:
+Recommended competition startup:
+
+```powershell
+cd D:\AIC1
+
+$env:AIC_CLIP_MODEL_ID="D:\AIC\.cache\huggingface\hub\models--openai--clip-vit-base-patch32\snapshots\3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
+$env:AIC_BGE_MODEL_PATH="D:\AIC\.cache\huggingface\hub\models--BAAI--bge-m3\snapshots\5617a9f61b028005a4858fdac845db406aefb181"
+
+# Optional. Without these variables the deterministic local planner remains available.
+$env:AIC_TRANSLATION_PROVIDER="gemini"
+$env:AIC_TRANSLATION_MODEL="gemini-3.5-flash"
+$env:AIC_TRANSLATION_API_KEY="<your-gemini-api-key>"
+
+python tools\competition_ui.py --check-only
+python tools\competition_ui.py
+```
+
+The default competition profile keeps TRAKE VLM disabled. To opt in to conditional Gemini sequence review, add this to the expanded `retrieval_ui.py` command:
+
+```powershell
+--trake-config configs\phase10_trake_gemini_opt_in.json
+```
+
+In KIS or Q&A mode, enable **Deep frame search** to decode and CLIP-score bounded neighborhoods only inside the videos returned by Stage A. The result contact sheet shows decoded frame IDs, timestamps, anchor keyframes, zoom and nearby-frame tools. **Gemini frame review** can then reorder only those allowlisted frames. In TRAKE mode, decoded refinement is available for the selected event while **Ask Gemini to review low-confidence chains** remains advisory and never changes the server-selected sequence.
+
+`competition_ui.py` loads `configs/competition_l21_l30.json`, validates local model paths and the CLIP/BGE/BM25/Phase-5 manifests, then starts `/submission` with full L21-L30 Hybrid Retrieval. A blocking preflight error prevents a partially configured contest server from starting.
+
+Equivalent expanded command:
 
 ```powershell
 $env:AIC_CLIP_MODEL_ID="D:\AIC\.cache\huggingface\hub\models--openai--clip-vit-base-patch32\snapshots\3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268"
@@ -75,12 +133,14 @@ python tools\retrieval_ui.py `
   --clip-local-files-only `
   --require-keyframes `
   --enable-hybrid-retrieval `
-  --bge-index-dir E:\AIC2026\artifacts\indexes\l21_l30_bge `
+  --bge-index-dir E:\AIC2026\artifacts\indexes\l21_l30_bge_v2 `
   --bge-model-path $env:AIC_BGE_MODEL_PATH `
-  --bm25-index-dir E:\AIC2026\artifacts\indexes\l21_l30_bm25 `
-  --phase5-store artifacts\phase5\phase5_store.sqlite `
+  --bm25-index-dir E:\AIC2026\artifacts\indexes\l21_l30_bm25_v2 `
+  --phase5-store E:\AIC2026\artifacts\phase5\l21_l30_phase5.sqlite3 `
   --qa-store artifacts\qa\phase7_qa.sqlite3 `
-  --trake-store artifacts\trake\phase8_trake.sqlite3
+  --trake-store artifacts\trake\phase8_trake.sqlite3 `
+  --enable-dense-frame-localization `
+  --dense-frame-cache-dir E:\AIC2026\artifacts\cache\dense_frames
 ```
 
 Open:
@@ -95,16 +155,24 @@ Current test status:
 
 ```text
 python -m pytest -q
-354 passed
+439 passed
 ```
 
 Known limitations:
 
-- OCR is not yet useful on current L21 artifact because all OCR detections are empty.
+- OCR is available for 873/873 videos through the consolidated Phase 5 store. It remains opt-in and missing/unmapped OCR is `UNAVAILABLE`, never `NO_MATCH`.
 - Hybrid Retrieval remains opt-in; CLIP remains the verified default visual baseline.
 - Gemini VLM answer drafting requires Internet and a configured Gemini API key.
 - Explicit Gemini/local structured constraints are applied as bounded candidate reranking in Agent search; failure or zero support preserves the base retriever ranking.
-- OCR currently has zero usable documents and ASR covers only 2/873 videos in the full registry.
+- ASR still covers only 2/873 videos because the consolidated package contains OCR only. Do not infer negative speech evidence outside those videos.
+- Agent BGE/BM25 retrieval suppresses identical repeated OCR within a video and caps broad OCR candidate noise. Candidate-local frame refinement keeps distinct OCR evidence inside the selected video.
+- BGE v2 contains the complete OCR-enriched 292,488-document corpus and is selected by the competition profile. Its measured accuracy improvement remains unclaimed until labelled evaluation exists.
+- Dense frame localization is bounded and opt-in. It decodes source video only around candidate timestamps, caches results by video/query/model/config fingerprint and falls back to the existing keyframe ranking when video access, decode or scoring fails.
+- Long-query routing avoids BM25 for visible counts (`3 cyclists`, `5 people`, `2 circles`) because OCR news text can otherwise dominate RRF. Explicit signs, quoted text, tables, countdowns, addresses and answer-number wording still enable lexical/OCR retrieval.
+- In `/submission`, `All`, `Sequence` and `Q1`-`Q6` candidate-lane buttons filter the review list. The server keeps the first three RRF consensus videos, may add up to two videos with a monotonic multi-event frame chain, then round-robins strong videos from individual Q lanes. A `SEQ matched/total - span` chip exposes the ordered timestamps. This is advisory review evidence and does not replace RRF scoring.
+- A decoded frame index is derived from the source video decoder and is suitable for review/export only after the operator confirms it matches the organizer's official frame numbering convention.
+- Run `python tools\phase10_upgrade_audit.py --output artifacts\audits\phase10_upgrade_audit.json` to compare Phase 5, corpus, BGE, BM25 and object manifests. It prints the resumable BGE v2 and filtered object-store v2 commands when artifacts are stale or missing.
+- `l21_l30_bge_bundle.tar.gz` is the old 173,393-document bundle with `OCR=0`; do not treat it as BGE v2.
 - Phase 8 TRAKE core is implemented for L21; quality/holdout verification is pending manual labels. See `docs/PHASE8_TESTING.md`.
 - Automatic official `frame_id` mapping is intentionally blocked. The submission UI requires a manually verified official frame ID or a future BTC-certified mapping.
 
@@ -604,7 +672,9 @@ See [`docs/PHASE9_SUBMISSION_HARDENING.md`](docs/PHASE9_SUBMISSION_HARDENING.md)
 
 ## Phase 9 Current - Hybrid Retrieval and Submission Agent
 
-Phase 9 adds modular BGE-M3/FAISS and BM25 retrievers without replacing CLIP. The Agent routes visual queries to CLIP, semantic text to BGE, exact/keyword text to BM25, and uses RRF only for mixed queries or explicit structured support. Gemini output is visible but is normalized by deterministic local guardrails before execution.
+Phase 9 adds modular BGE-M3/FAISS and BM25 retrievers without replacing CLIP. The Agent routes visual queries to CLIP, semantic text to BGE, exact/keyword text to BM25, and uses RRF only for mixed queries or explicit structured support. Long visual narratives are decomposed into at most four bounded CLIP queries, batch-encoded, fused at video level with inner RRF, then combined with text channels by the existing outer RRF. Gemini output is visible but is normalized by deterministic local guardrails before execution.
+
+Both Agent workspaces display the executed CLIP query list (`Q1` to `Q4`). Candidate provenance identifies which variant retrieved a frame. BGE/BM25 candidate generation also reports OCR duplicate/cap suppression statistics so operators can distinguish index hits from retained review evidence.
 
 The separate `/submission` workspace stores an ACTIVE session and confirmed query queue in SQLite. KIS runs Agent retrieval directly. Q&A runs evidence preparation, selected-evidence answer drafting and review in the same page. TRAKE runs plan, search, temporal alignment and chain review in the same page. All three tasks still require manually verified official frame IDs until a BTC mapping is certified.
 
@@ -617,9 +687,10 @@ Official output rules enforced by code:
 - ZIP entries are always under `submission/`.
 - Score, rank, provenance, keyframe ID and timestamp cannot enter the official writer.
 
-Use `/submission` to Start, run a task, inspect full-size images, browse neighboring frames at radius 3/6/12/20, review evidence or chains, enter verified official frame IDs, Confirm, Validate, Done and download `submission.zip`. Session files are written under `artifacts/submissions/` and are not committed.
+Use `/submission` to Start, run a task, inspect full-size images, browse neighboring frames at radius 3/6/12/20, review evidence or chains, enter verified official frame IDs, Confirm, Validate, Done and download `submission.zip`. Each KIS/Q&A/TRAKE frame input also has a minute/second converter backed by the video's mapping FPS and nearest mapped keyframe. The result is an estimate and must still be verified before confirmation. The queue accepts many distinct Query IDs and scrolls independently; confirming the same Query ID updates that existing item. The CSV Files panel lists every queued query separately. Each ACTIVE-session CSV is directly editable and has independent Reset, Save changes and Download controls. Generated rows follow the organizer examples: comma-space separators for all tasks and an always-quoted Q&A answer. Save changes persists the edited rows to SQLite and the final ZIP. Chrome/Edge opens a native save picker so the operator can choose drive E directly. Session files are written under `artifacts/submissions/` and are not committed.
 
 Latest implementation plan and report:
 
 - [`plan/11_PHASE_9_SUBMISSION_AGENT_UI_REPLAN.md`](plan/11_PHASE_9_SUBMISSION_AGENT_UI_REPLAN.md)
-- [`reports/Phase_9_21-08-2026_9.md`](reports/Phase_9_21-08-2026_9.md)
+- [`reports/Phase_9_21-08-2026_12.md`](reports/Phase_9_21-08-2026_12.md)
+- [`reports/Phase_10_31-08-2026_2.md`](reports/Phase_10_31-08-2026_2.md)

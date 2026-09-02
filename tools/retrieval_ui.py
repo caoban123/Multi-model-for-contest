@@ -52,6 +52,14 @@ def main() -> int:
     parser.add_argument("--bm25-index-dir", type=Path, default=ROOT / "artifacts" / "indexes" / "l21_bm25")
     parser.add_argument("--submission-store", type=Path, default=ROOT / "artifacts" / "submissions" / "submission_sessions.sqlite3")
     parser.add_argument("--submission-output-dir", type=Path, default=ROOT / "artifacts" / "submissions")
+    parser.add_argument("--enable-dense-frame-localization", action="store_true")
+    parser.add_argument(
+        "--dense-frame-cache-dir",
+        type=Path,
+        default=Path(os.environ["AIC_DENSE_FRAME_CACHE_DIR"])
+        if os.environ.get("AIC_DENSE_FRAME_CACHE_DIR")
+        else ROOT / "artifacts" / "dense_frames",
+    )
     parser.add_argument(
         "--require-keyframes",
         action="store_true",
@@ -106,6 +114,8 @@ def main() -> int:
         submission_store_path=args.submission_store,
         submission_output_dir=args.submission_output_dir,
         submission_static_dir=ROOT / "web" / "submission_ui",
+        dense_frame_enabled=args.enable_dense_frame_localization,
+        dense_frame_cache_dir=args.dense_frame_cache_dir,
     )
     try:
         server = run_server(config, host=args.host, port=args.port)

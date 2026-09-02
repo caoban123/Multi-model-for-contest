@@ -124,3 +124,35 @@ def test_text_corpus_combines_multiple_groups(tmp_path: Path) -> None:
     assert manifest["group"] is None
     assert manifest["groups"] == ["L21", "L22"]
     assert {item.video_id for item in documents} == {"L21_V001", "L22_V001"}
+
+
+def test_text_corpus_aggregates_ocr_detections_per_keyframe(tmp_path: Path) -> None:
+    _write_registry(tmp_path)
+    _write_metadata(tmp_path)
+    _write_phase5_store(tmp_path)
+    path = tmp_path / "artifacts" / "phase5" / "phase5_store.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.executemany(
+            """
+            INSERT INTO ocr(
+              video_id,keyframe_id,frame_idx,pts_time,text_raw,text_normalized,text_folded,
+              confidence,bbox_json,run_id
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            """,
+            [
+                ("L21_V001", 1, 25, 1.0, "THỜI SỰ", "thời sự", "thoi su", 0.9, "[]", "ocr-v2"),
+                ("L21_V001", 1, 25, 1.0, "19H", "19h", "19h", 0.8, "[]", "ocr-v2"),
+                ("L21_V001", 1, 25, 1.0, "THỜI SỰ", "thời sự", "thoi su", 0.7, "[]", "ocr-v2"),
+            ],
+        )
+
+    documents, manifest = build_text_corpus(
+        tmp_path,
+        object_store_path=tmp_path / "missing-objects.sqlite",
+    )
+    ocr_documents = [item for item in documents if item.source_type == "ocr"]
+
+    assert len(ocr_documents) == 1
+    assert ocr_documents[0].text == "THỜI SỰ 19H"
+    assert ocr_documents[0].provenance["detection_count"] == 3
+    assert manifest["source_counts"]["ocr"] == 1

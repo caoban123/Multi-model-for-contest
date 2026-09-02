@@ -24,3 +24,12 @@ def test_evidence_for_timeline_contains_bbox_and_segment(tmp_path):
 
 def test_ocr_minimum_confidence_filters_result(tmp_path):
     service=build(tmp_path/"phase5.sqlite"); assert service.search_ocr("thời sự",10,.95)==[]
+
+def test_modality_availability_uses_row_counts(tmp_path):
+    service=build(tmp_path/"phase5.sqlite")
+    assert service.ocr_available and service.asr_available
+    assert service.stats == {"ocr_records":1,"ocr_videos":1,"asr_segments":1,"asr_videos":1}
+
+def test_long_ocr_query_matches_distinctive_token(tmp_path):
+    service=build(tmp_path/"phase5.sqlite")
+    assert service.search_ocr("biển hiệu có chữ thời sự",10,.5)[0]["matched_text"]=="THỜI SỰ 19H"

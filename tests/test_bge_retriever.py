@@ -10,6 +10,7 @@ import pytest
 
 from aic_retrieval.bge_retriever import BgeRetriever, build_bge_index
 from aic_retrieval.retrievers import RetrievalRequest
+from aic_retrieval.vector_store import VectorSearchResult
 
 
 class FakeEncoder:
@@ -98,7 +99,7 @@ def test_bge_index_build_reload_and_search(tmp_path: Path) -> None:
     assert retriever.health().status == "DEGRADED"
 
 
-def test_bge_retriever_filters_source_and_detects_corruption(tmp_path: Path) -> None:
+def test_bge_retriever_filters_source_video_and_detects_corruption(tmp_path: Path) -> None:
     corpus, corpus_manifest = _write_corpus(tmp_path)
     output = tmp_path / "artifacts" / "indexes" / "l21_bge"
     encoder = FakeEncoder()
@@ -107,6 +108,12 @@ def test_bge_retriever_filters_source_and_detects_corruption(tmp_path: Path) -> 
 
     hits = retriever.search(RetrievalRequest("q1", "xin chào", ("L21",), 1, {"source_types": ("metadata",)}))
     assert hits[0].source_type == "metadata"
+
+    video_hits = retriever.search(
+        RetrievalRequest("q2", "xin chào", ("L21",), 5, {"video_ids": ("L21_V002",)})
+    )
+    assert video_hits
+    assert {hit.video_id for hit in video_hits} == {"L21_V002"}
 
     with (output / "vectors.faiss").open("ab") as stream:
         stream.write(b"corrupt")
@@ -152,6 +159,42 @@ def test_bge_multigroup_index_filters_requested_group(tmp_path: Path) -> None:
 
     assert hits
     assert {hit.video_id.split("_", 1)[0] for hit in hits} == {"L22"}
+
+
+def test_bge_filtered_search_expands_pool_until_enough_exact_hits() -> None:
+    retriever = BgeRetriever.__new__(BgeRetriever)
+    retriever.manifest = {"groups": ["L21"]}
+    retriever.encoder = FakeEncoder()
+    retriever.documents = [
+        _document(
+            f"ocr:{position}",
+            "xin chào",
+            "L21_TARGET" if position == 1500 else "L21_OTHER",
+            "ocr",
+            position + 1,
+        )
+        for position in range(3000)
+    ]
+
+    class RecordingStore:
+        count = 3000
+        calls: list[int] = []
+
+        def search(self, _query, top_k):
+            self.calls.append(top_k)
+            return [VectorSearchResult(position, 1.0 - position / 10000.0) for position in range(top_k)]
+
+    retriever.store = RecordingStore()
+    hits = retriever.search(RetrievalRequest(
+        "filtered",
+        "xin chào",
+        ("L21",),
+        1,
+        {"source_types": ("ocr",), "video_ids": ("L21_TARGET",)},
+    ))
+
+    assert retriever.store.calls == [1024, 2048]
+    assert [hit.video_id for hit in hits] == ["L21_TARGET"]
 
 
 def test_bge_build_resumes_from_last_completed_checkpoint(tmp_path: Path) -> None:

@@ -65,6 +65,8 @@ class QaWorkflow:
         answerer: Any | None = None,
     ) -> tuple[QaWorkspaceState, AnswerDraft]:
         state = self.get(session_id)
+        if selected_evidence_ids:
+            _require_single_video_evidence(state.pack, selected_evidence_ids)
         # The answerer creates a deterministic content identity. A persisted
         # draft is an audit event, so it must be unique even when a reviewer
         # submits the same evidence in this or another session.
@@ -72,6 +74,8 @@ class QaWorkflow:
             (answerer or self.answerer).draft(state.pack, state.route, selected_evidence_ids),
             draft_id=f"draft-{uuid4().hex}",
         )
+        if draft.evidence_refs:
+            _require_single_video_evidence(state.pack, draft.evidence_refs)
         state.drafts[draft.draft_id] = draft
         if self.store is not None:
             self.store.save_draft(session_id, draft)
@@ -91,6 +95,7 @@ class QaWorkflow:
         if draft is None:
             raise ValueError("draft_id was not created in this session")
         if decision is not ReviewDecision.REJECTED:
+            _require_single_video_evidence(state.pack, selected_evidence_ids)
             require_confirmable(draft, state.pack, selected_evidence_ids)
             answer = (final_answer or draft.raw_answer or "").strip()
             if not answer:
@@ -164,3 +169,14 @@ def jsonable(value: Any) -> Any:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _require_single_video_evidence(pack: EvidencePack, evidence_ids: tuple[str, ...]) -> None:
+    """Reject unknown or cross-video evidence before an answer can be reviewed."""
+    evidence_by_id = {item.evidence_id: item for item in pack.evidence_refs}
+    missing = [evidence_id for evidence_id in evidence_ids if evidence_id not in evidence_by_id]
+    if missing:
+        raise ValueError(f"selected evidence is not present in this Q&A session: {missing[0]}")
+    video_ids = {evidence_by_id[evidence_id].video_id for evidence_id in evidence_ids}
+    if len(video_ids) != 1:
+        raise ValueError("Q&A selected evidence must belong to exactly one video")

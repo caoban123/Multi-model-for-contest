@@ -20,7 +20,9 @@ def create_store(path: Path) -> sqlite3.Connection:
           id INTEGER PRIMARY KEY, video_id TEXT NOT NULL, keyframe_id INTEGER NOT NULL,
           frame_idx INTEGER NOT NULL, pts_time REAL NOT NULL, text_raw TEXT NOT NULL,
           text_normalized TEXT NOT NULL, text_folded TEXT NOT NULL, confidence REAL NOT NULL,
-          bbox_json TEXT NOT NULL, run_id TEXT NOT NULL);
+          bbox_json TEXT NOT NULL, run_id TEXT NOT NULL,
+          source_keyframe_id TEXT, source_frame_idx INTEGER, source_pts_time REAL,
+          mapping_distance_seconds REAL, source_status TEXT);
         CREATE VIRTUAL TABLE IF NOT EXISTS ocr_fts USING fts5(text_normalized, text_folded, content='ocr', content_rowid='id');
         CREATE TRIGGER IF NOT EXISTS ocr_ai AFTER INSERT ON ocr BEGIN
           INSERT INTO ocr_fts(rowid,text_normalized,text_folded) VALUES(new.id,new.text_normalized,new.text_folded);
@@ -38,8 +40,19 @@ def create_store(path: Path) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_ocr_frame ON ocr(video_id,keyframe_id);
         CREATE INDEX IF NOT EXISTS idx_asr_video_time ON asr(video_id,start_time,end_time);
     """)
+    _ensure_column(connection, "ocr", "source_keyframe_id", "TEXT")
+    _ensure_column(connection, "ocr", "source_frame_idx", "INTEGER")
+    _ensure_column(connection, "ocr", "source_pts_time", "REAL")
+    _ensure_column(connection, "ocr", "mapping_distance_seconds", "REAL")
+    _ensure_column(connection, "ocr", "source_status", "TEXT")
     connection.execute("INSERT OR REPLACE INTO metadata VALUES('store_version',?)", (STORE_VERSION,))
     return connection
+
+
+def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def ingest_ocr(connection: sqlite3.Connection, frames: Iterable[OcrFrame]) -> int:
@@ -67,10 +80,16 @@ def ingest_asr(connection: sqlite3.Connection, transcripts: Iterable[AsrTranscri
 
 class Phase5SearchService:
     def __init__(self, path: Path, refs: Iterable[Any] = ()) -> None:
-        self.path = path; self.refs = list(refs)
+        self.path = path; self.refs = list(refs); self.stats = self._load_stats()
 
     @property
     def available(self) -> bool: return self.path.is_file()
+
+    @property
+    def ocr_available(self) -> bool: return self.stats["ocr_records"] > 0
+
+    @property
+    def asr_available(self) -> bool: return self.stats["asr_segments"] > 0
 
     def search_ocr(self, query: str, top_k: int = 100, min_confidence: float = 0.0) -> list[dict[str, Any]]:
         return self._search("ocr", query, top_k, min_confidence)
@@ -87,11 +106,30 @@ class Phase5SearchService:
         for item in ocr: item["bbox"] = json.loads(item.pop("bbox_json"))
         return {"ocr":ocr,"asr":asr}
 
+    def _load_stats(self) -> dict[str, int]:
+        stats = {"ocr_records": 0, "ocr_videos": 0, "asr_segments": 0, "asr_videos": 0}
+        if not self.path.is_file():
+            return stats
+        try:
+            with sqlite3.connect(self.path) as connection:
+                for table, count_key, video_key in (
+                    ("ocr", "ocr_records", "ocr_videos"),
+                    ("asr", "asr_segments", "asr_videos"),
+                ):
+                    row = connection.execute(
+                        f"SELECT COUNT(*), COUNT(DISTINCT video_id) FROM {table}"
+                    ).fetchone()
+                    stats[count_key], stats[video_key] = int(row[0]), int(row[1])
+        except sqlite3.Error:
+            return stats
+        return stats
+
     def _search(self, modality: str, query: str, top_k: int, min_confidence: float | None) -> list[dict[str, Any]]:
         if not self.available: raise FileNotFoundError(self.path)
         exact=normalize_text(query); folded=normalize_text(query,fold_accents=True)
         if not exact: raise ValueError("text query must not be empty")
-        terms=" OR ".join(f'"{term}"' for term in sorted({exact,folded}) if term)
+        tokens = sorted({token for value in (exact, folded) for token in value.split() if token})
+        terms=" OR ".join(f'"{term}"' for term in tokens)
         where=" AND source.confidence >= ?" if min_confidence is not None else ""
         params:[Any]=[terms];
         if min_confidence is not None: params.append(min_confidence)

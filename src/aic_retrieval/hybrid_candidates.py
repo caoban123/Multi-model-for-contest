@@ -163,9 +163,22 @@ class StructuredCandidateGenerator:
                 continue
             count_key = "ocr_frames" if modality == "ocr" else "asr_segments"
             channel_counts[count_key] = 0
-            if self.phase5_service is None or not self.phase5_service.available:
+            modality_available = bool(
+                self.phase5_service
+                and (
+                    self.phase5_service.ocr_available
+                    if modality == "ocr"
+                    else self.phase5_service.asr_available
+                )
+            )
+            if not modality_available:
                 raise ValueError(f"{modality} modality enabled but Phase 5 store is not configured")
-            results = self.phase5_service.search_ocr(query.visual_text, query.clip_candidate_pool, query.ocr_min_confidence) if modality == "ocr" else self.phase5_service.search_asr(query.visual_text, query.clip_candidate_pool)
+            text_query = (
+                query.ocr_text or query.visual_text
+                if modality == "ocr"
+                else query.asr_text or query.visual_text
+            )
+            results = self.phase5_service.search_ocr(text_query, query.clip_candidate_pool, query.ocr_min_confidence) if modality == "ocr" else self.phase5_service.search_asr(text_query, query.clip_candidate_pool)
             channel_counts[count_key] = len(results)
             matched: set[tuple[str, int]] = set()
             for result in results:

@@ -871,7 +871,10 @@ function renderAgentPlan(plan, payload = {}) {
   if (!plan) return;
   const trace = payload.agent_trace || {};
   agentPlanProfile.textContent = `${plan.intent || "mixed"} · ${plan.profile || "-"} · ${plan.planner_source || "local"}`;
-  agentClipQueryEl.textContent = plan.visual_clip_query_en || "-";
+  const clipQueries = Array.isArray(plan.visual_clip_queries_en) && plan.visual_clip_queries_en.length
+    ? plan.visual_clip_queries_en
+    : (plan.visual_clip_query_en ? [plan.visual_clip_query_en] : []);
+  agentClipQueryEl.textContent = clipQueries.map((query, index) => `Q${index + 1}: ${query}`).join("\n") || "-";
   agentSemanticQueryEl.textContent = plan.semantic_text_query || "-";
   agentLexicalQueryEl.textContent = plan.lexical_text_query || "-";
   clipQueryInput.value = plan.visual_clip_query_en || "";

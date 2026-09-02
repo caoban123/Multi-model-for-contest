@@ -1261,7 +1261,57 @@ Bằng chứng runtime:
 - `person wearing a red shirt`: CLIP + object/attribute structured support, 30 candidates, radius-20 neighborhood có 25/25 ảnh.
 - Candidate object scan Top-120: 0,08-0,14 giây thay cho khoảng 40 giây với candidate-scoped SQLite.
 - TRAKE smoke: 2 events, 1 valid chain tại `L21_V011`, zero non-L21 candidates.
-- Full automated suite: 354 passed.
+- Full automated suite: 367 passed.
+
+## Implementation Update - Timestamp Review and CSV Save
+
+Completed on 21-08-2026:
+
+- Restore the `/api/translate` HTTP handler after the response-streaming change.
+- Stream keyframes, videos and static/download responses in bounded chunks.
+- Ignore only confirmed client-disconnect socket errors; storage read errors remain visible.
+- Return HTTP 503 when keyframe storage is unavailable before response headers are sent.
+- Add `/api/time-to-frame` for KIS, Q&A and TRAKE review.
+- Estimate a raw video frame from the nearest mapping anchor: `mapped_frame_idx + time_delta * mapped_fps`.
+- Return the nearest indexed keyframe and its image for visual verification.
+- Keep timestamp-derived frames behind the existing manual confirmation gate.
+- Add Save CSV beside CSV Preview. Chrome/Edge uses the native save picker; fallback browsers use their normal download directory.
+- CSV Preview editing is opt-in: Edit CSV -> Apply to queue -> Save CSV.
+- Edited content is parsed with Python `csv.reader`, validated for KIS/Q&A/TRAKE, then persisted to the SQLite queue.
+- Save remains disabled while an edited draft has not passed validation.
+- Full automated suite after implementation: 367 passed.
+
+## Implementation Update - Multi-query Queue and CSV Files
+
+Completed on 21-08-2026:
+
+- Keep every distinct Query ID in the submission queue; confirming an existing Query ID remains an intentional update operation.
+- Give the queue an independent desktop scroll region so more than two entries remain practical during the contest.
+- Replace the single active CSV Preview with a CSV Files list containing one collapsible editor per queued query.
+- Preserve independent draft, open/closed and applied state for every CSV while other queue entries change.
+- Provide Edit, Apply, Reset and Save actions for each CSV file independently.
+- Block Validate and Done while any CSV has an unapplied draft.
+- Keep Save disabled for only the dirty file until its content passes task-specific server validation.
+- Keep narrow/mobile layouts in normal document flow instead of nested fixed-height scroll regions.
+- Regression coverage proves four queued Query IDs remain present and editing one CSV does not mutate the other three.
+
+## Implementation Update - Organizer CSV Presentation
+
+Completed on 21-08-2026:
+
+- Remove the separate Edit and Apply controls from each CSV item.
+- Keep CSV text directly editable while the submission session is ACTIVE.
+- Use independent Reset, Save changes and Download actions for each query CSV.
+- Render KIS as `<video_id>, <frame_idx>`.
+- Render Q&A as `<video_id>, <frame_idx>, "<answer>"`, with the answer always quoted and embedded quotes escaped according to CSV rules.
+- Render TRAKE as `<video_id>, <frame_1>, <frame_2>, ..., <frame_N>`.
+- Parse comma-space organizer examples with `skipinitialspace=True`, including quoted Q&A answers containing commas.
+- Keep no-header, UTF-8, row-count, answer-length and task column rules unchanged.
+
+Operational limitation:
+
+- A browser cannot silently force output to `E:\`. The operator chooses drive E in the native save picker.
+- Full-data runtime smoke can fail with Windows `WinError 433` while the external E drive is unavailable; this must not be misclassified as a browser disconnect.
 
 Chưa đóng quality gate:
 

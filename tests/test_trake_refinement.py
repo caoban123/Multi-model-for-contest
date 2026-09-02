@@ -29,3 +29,31 @@ def test_missing_video_or_scorer_returns_keyframe_safe_unavailable(tmp_path: Pat
     video=tmp_path/'v.mp4'; video.write_bytes(b'x')
     no_scorer=DenseRefiner(tmp_path,{"L21_V001":{"video_path":"v.mp4"}},tmp_path/'cache',None,decoder=FakeDecoder()).refine(video_id='L21_V001',event_id='e1',event_text='x',source_keyframe_id=1,source_frame_idx=1,source_pts_time=1,fps=25)
     assert 'keyframe chain remains valid' in no_scorer.reason
+
+
+def test_refinement_accepts_registry_video_resolver_outside_repo_root(tmp_path: Path) -> None:
+    external = tmp_path.parent / f"{tmp_path.name}-external" / "L21_V001.mp4"
+    external.parent.mkdir(parents=True, exist_ok=True)
+    external.write_bytes(b"video")
+    decoder = FakeDecoder()
+    refiner = DenseRefiner(
+        tmp_path,
+        {"L21_V001": {"video_path": "data/videos/L21_V001.mp4"}},
+        tmp_path / "cache",
+        lambda _text, images: [-abs(item["time"] - 2.0) for item in images],
+        decoder=decoder,
+        video_resolver=lambda _video_id: external,
+    )
+
+    result = refiner.refine(
+        video_id="L21_V001",
+        event_id="e1",
+        event_text="event",
+        source_keyframe_id=1,
+        source_frame_idx=50,
+        source_pts_time=2.0,
+        fps=25.0,
+    )
+
+    assert result.status == "AVAILABLE"
+    assert result.provenance["source_video"] == str(external.resolve())

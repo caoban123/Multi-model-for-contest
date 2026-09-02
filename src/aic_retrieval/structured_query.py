@@ -32,6 +32,8 @@ class ObjectConstraint:
 @dataclass(frozen=True)
 class StructuredQuery:
     visual_text: str
+    ocr_text: str = ""
+    asr_text: str = ""
     enable_clip: bool = True
     enable_objects: bool = False
     enable_metadata: bool = False

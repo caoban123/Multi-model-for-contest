@@ -19,7 +19,7 @@ def test_session_persists_replace_remove_validate_and_finalize(tmp_path: Path) -
     kis = OfficialQuery("query-1-kis", "KIS", (OfficialPrediction("L21_V001", (1234,)),))
     state = first.confirm_query(session_id, kis, mapping_sources=("manual_official",), source={"candidate_id": "r1"})
     assert state["submission_queue"][0]["output_file"] == "query-1-kis.csv"
-    assert state["queries"][0]["csv_preview"] == "L21_V001,1234\n"
+    assert state["queries"][0]["csv_preview"] == "L21_V001, 1234\n"
 
     replacement = OfficialQuery("query-1-kis", "KIS", (OfficialPrediction("L21_V002", (999,)),))
     first.confirm_query(session_id, replacement, mapping_sources=("btc_mapping",))

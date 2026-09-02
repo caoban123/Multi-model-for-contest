@@ -350,6 +350,14 @@ class TrakeRuntimeConfig:
 
 def load_trake_config(path: Path) -> TrakeRuntimeConfig:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    extends = payload.pop("extends", None)
+    if extends:
+        base_path = (path.parent / str(extends)).resolve()
+        if base_path == path.resolve():
+            raise ValueError("TRAKE config cannot extend itself")
+        base = json.loads(base_path.read_text(encoding="utf-8"))
+        base.pop("extends", None)
+        payload = _deep_merge(base, payload)
     values = dict(payload)
     values["retrieval"] = RetrievalSettings(**values.get("retrieval", {}))
     values["fusion"] = FusionSettings(**values.get("fusion", {}))
@@ -363,3 +371,13 @@ def load_trake_config(path: Path) -> TrakeRuntimeConfig:
     values["features"] = FeatureSettings(**values.get("features", {}))
     values["legacy_scoring"] = ScoreConfig(**values.get("legacy_scoring", {}))
     return TrakeRuntimeConfig(**values)
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged

@@ -7,6 +7,7 @@ import sqlite3
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from itertools import groupby
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -191,17 +192,26 @@ def _phase5_documents(path: Path, group: str) -> Iterator[TextDocument]:
                 "FROM ocr WHERE video_id LIKE ? ORDER BY video_id,keyframe_id,id",
                 (f"{group}_%",),
             )
-            for row in rows:
+            identity = lambda row: (
+                str(row["video_id"]), int(row["keyframe_id"]), int(row["frame_idx"]), float(row["pts_time"])
+            )
+            for (video_id, keyframe_id, frame_idx, pts_time), frame_rows in groupby(rows, key=identity):
+                items = list(frame_rows)
+                texts = list(dict.fromkeys(str(row["text_raw"]).strip() for row in items if str(row["text_raw"]).strip()))
                 document = _make_document(
                     source_type="ocr",
-                    video_id=str(row["video_id"]),
-                    text=str(row["text_raw"]),
-                    identity={"video_id": row["video_id"], "keyframe_id": row["keyframe_id"], "detection_id": row["id"], "run_id": row["run_id"]},
-                    keyframe_id=int(row["keyframe_id"]),
-                    frame_idx=int(row["frame_idx"]),
-                    pts_time=float(row["pts_time"]),
-                    source_field="detected_text",
-                    provenance={"confidence": row["confidence"], "bbox": json.loads(row["bbox_json"]), "run_id": row["run_id"]},
+                    video_id=video_id,
+                    text=" ".join(texts),
+                    identity={"video_id": video_id, "keyframe_id": keyframe_id, "source": "ocr_frame"},
+                    keyframe_id=keyframe_id,
+                    frame_idx=frame_idx,
+                    pts_time=pts_time,
+                    source_field="detected_frame_text",
+                    provenance={
+                        "detection_count": len(items),
+                        "max_confidence": max(float(row["confidence"]) for row in items),
+                        "run_ids": sorted({str(row["run_id"]) for row in items}),
+                    },
                 )
                 if document:
                     yield document

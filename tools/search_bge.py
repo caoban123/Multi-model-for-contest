@@ -26,13 +26,20 @@ def main() -> int:
     parser.add_argument("--groups", help="Comma-separated groups; defaults to every group in the index manifest.")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--source-types", default="")
+    parser.add_argument("--videos", default="", help="Comma-separated video IDs used for candidate-local refinement.")
     args = parser.parse_args()
     encoder = BgeEncoder(args.model_id, model_path=args.model_path, cache_dir=args.cache_dir, local_files_only=True, device=args.device)
     retriever = BgeRetriever(ROOT, args.index_dir, encoder)
     source_types = tuple(item.strip() for item in args.source_types.split(",") if item.strip())
+    video_ids = tuple(item.strip() for item in args.videos.split(",") if item.strip())
     manifest_groups = retriever.manifest.get("groups") or [retriever.manifest.get("group") or "L21"]
     groups = tuple(item.strip() for item in (args.groups or ",".join(manifest_groups)).split(",") if item.strip())
-    request = RetrievalRequest("cli", args.query, groups, args.top_k, {"source_types": source_types} if source_types else {})
+    filters = {}
+    if source_types:
+        filters["source_types"] = source_types
+    if video_ids:
+        filters["video_ids"] = video_ids
+    request = RetrievalRequest("cli", args.query, groups, args.top_k, filters)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     print(json.dumps({"health": retriever.health().to_dict(), "results": [item.to_dict() for item in retriever.search(request)]}, ensure_ascii=False, indent=2))

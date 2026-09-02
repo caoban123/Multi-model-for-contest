@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -7,7 +8,13 @@ import pytest
 from aic_retrieval.hybrid_query_planner import HybridQueryPlan, HybridQueryPlanner
 from aic_retrieval.metadata_search import load_metadata_documents
 from aic_retrieval.retrievers import RetrievalHit
-from aic_retrieval.retrieval_ui import RetrievalUiConfig, RetrievalUiService, parse_int
+from aic_retrieval.frame_localization import FrameLocalizer
+from aic_retrieval.retrieval_ui import (
+    RetrievalUiConfig,
+    RetrievalUiService,
+    _is_client_disconnect_error,
+    parse_int,
+)
 from aic_retrieval.search import FrameRef, SearchResult, aggregate_results_by_video
 from aic_retrieval.qa_workflow import QaWorkflow
 from aic_retrieval.trake_config import TrakeRuntimeConfig
@@ -78,6 +85,31 @@ def test_enrich_result_adds_metadata_and_image_url(tmp_path: Path) -> None:
     assert result["video_url"] == "/video?video_id=L21_V001"
     assert result["metadata"]["title"] == "60 Giây Sáng"
     assert result["metadata"]["keywords"] == ["tin tức", "HTV"]
+
+
+def test_enrich_qa_response_adds_review_contract_to_video_candidates(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    response = service._enrich_qa_response({
+        "video_results": [{
+            "video_id": "L21_V001",
+            "rank": 1,
+            "score": 0.91,
+            "frames": [{
+                "video_id": "L21_V001",
+                "keyframe_id": 2,
+                "frame_idx": 30,
+                "pts_time": 1.0,
+                "keyframe_path": "data/keyframes/L21_V001/002.jpg",
+            }],
+        }],
+    })
+
+    candidate = response["video_results"][0]
+    assert candidate["candidate_id"] == "qa:L21_V001:r1"
+    assert candidate["image_url"].endswith("002.jpg")
+    assert candidate["video_url"] == "/video?video_id=L21_V001"
+    assert candidate["metadata"]["title"]
+    assert candidate["retrieval"]["score"] == pytest.approx(0.91)
 
 
 def test_resolve_keyframe_path_rejects_outside_repo(tmp_path: Path) -> None:
@@ -156,6 +188,177 @@ def test_service_translate_uses_configured_translator(tmp_path: Path) -> None:
         "provider": "gemini",
         "model": "fake-model",
     }
+
+
+def test_time_to_frame_uses_video_fps_and_returns_nearest_keyframe(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    service.refs_by_video["L21_V001"] = [
+        FrameRef("L21_V001", "L21", 1, 1800, 60.0, 30.0, "data/keyframes/L21_V001/001.jpg"),
+        FrameRef("L21_V001", "L21", 2, 1900, 63.0, 30.0, "data/keyframes/L21_V001/002.jpg"),
+    ]
+
+    result = service.time_to_frame("L21_V001", 1, 2.5)
+
+    assert result["pts_time"] == 62.5
+    assert result["fps"] == 30.0
+    assert result["estimated_frame_idx"] == 1885
+    assert result["calculation"] == "nearest_mapping_anchor_plus_time_delta_times_fps"
+    assert result["nearest_keyframe"]["keyframe_id"] == 2
+    assert result["nearest_keyframe"]["distance_seconds"] == 0.5
+    assert result["mapping_status"] == "ESTIMATED_FROM_TIMESTAMP_REQUIRES_MANUAL_CONFIRMATION"
+
+
+def test_submission_candidate_refinement_fuses_clip_and_video_local_text_hits(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    service.refs = service.refs_by_video["L21_V001"]
+    service.index = np.asarray(
+        [[0.0, 1.0], [0.2, 0.8], [1.0, 0.0], [0.8, 0.2]],
+        dtype=np.float32,
+    )
+    service.frame_localizer = FrameLocalizer(service.index, service.refs)
+    service.submission_store = SimpleNamespace(get=lambda _session_id: {"status": "ACTIVE"})
+    service._encoder = lambda: SimpleNamespace(encode_text=lambda _query: np.asarray([1.0, 0.0], dtype=np.float32))
+    plan = HybridQueryPlan(
+        original_query="người cao tuổi ở quán trọ",
+        visual_clip_query_en="elderly person at a boarding house",
+        semantic_text_query="người cao tuổi ở quán trọ",
+        lexical_text_query="quán trọ người cao tuổi",
+        intent="mixed",
+        enabled_retrievers=("clip", "bge", "bm25"),
+        profile="clip_bge_bm25_rrf",
+        fusion_method="rrf",
+        reasons=("fixture",),
+    )
+    service.hybrid_query_planner = SimpleNamespace(
+        plan_with_trace=lambda *_args, **_kwargs: SimpleNamespace(
+            plan=plan,
+            trace=SimpleNamespace(to_dict=lambda: {"status": "LOCAL_FIXTURE"}),
+        )
+    )
+
+    class FakeHybridEngine:
+        factories = {"bge": object(), "bm25": object()}
+
+        def search_channel(self, name, request):
+            assert request.filters["video_ids"] == ("L21_V001",)
+            assert request.filters["source_types"] == ("ocr", "asr")
+            return [RetrievalHit(
+                retriever=name,
+                rank=1,
+                raw_score=0.8 if name == "bge" else 4.0,
+                video_id="L21_V001",
+                source_type="ocr",
+                document_id=f"{name}:ocr:1",
+                keyframe_id=3,
+                frame_idx=60,
+                pts_time=2.0,
+                matched_text="552 Lý Thường Kiệt",
+                provenance={"fixture": name},
+            )]
+
+    service.hybrid_engine = FakeHybridEngine()
+
+    payload = service.submission_refine_candidate(
+        "submission-1",
+        "query-1",
+        "người cao tuổi ở quán trọ",
+        "L21_V001",
+        seed_keyframe_id=2,
+        radius_seconds=5,
+        frame_limit=4,
+        use_gemini=False,
+        use_dense=False,
+    )
+
+    assert payload["status"] == "READY_FOR_REVIEW"
+    assert payload["refinement"]["video_allowlist"] == ["L21_V001"]
+    assert payload["refinement"]["searched_full_video"] is False
+    assert payload["frames"][0]["keyframe_id"] == 3
+    assert payload["frames"][0]["refinement_channels"] == ["bge", "bm25", "clip"]
+    assert {item["retriever"] for item in payload["frames"][0]["refinement_evidence"]} == {"bge", "bm25"}
+    assert all(frame["video_id"] == "L21_V001" for frame in payload["frames"])
+
+
+def test_submission_candidate_refinement_returns_decoded_video_frames(tmp_path: Path) -> None:
+    service = make_service(tmp_path)
+    service.refs = service.refs_by_video["L21_V001"]
+    service.index = np.asarray(
+        [[0.0, 1.0], [0.2, 0.8], [1.0, 0.0], [0.8, 0.2]],
+        dtype=np.float32,
+    )
+    service.frame_localizer = FrameLocalizer(service.index, service.refs)
+    service.submission_store = SimpleNamespace(get=lambda _session_id: {"status": "ACTIVE"})
+    service._encoder = lambda: SimpleNamespace(encode_text=lambda _query: np.asarray([1.0, 0.0], dtype=np.float32))
+    plan = HybridQueryPlan(
+        original_query="person opens a door",
+        visual_clip_query_en="person opens a door",
+        semantic_text_query="person opens a door",
+        lexical_text_query="person opens a door",
+        intent="visual",
+        enabled_retrievers=("clip",),
+        profile="clip",
+        fusion_method="none",
+        reasons=("fixture",),
+    )
+    service.hybrid_query_planner = SimpleNamespace(
+        plan_with_trace=lambda *_args, **_kwargs: SimpleNamespace(
+            plan=plan,
+            trace=SimpleNamespace(to_dict=lambda: {"status": "LOCAL_FIXTURE"}),
+        )
+    )
+    service.hybrid_engine = None
+    service.dense_frame_localizer = SimpleNamespace(localize=lambda **_kwargs: {
+        "status": "APPLIED",
+        "version": "dense-frame-localization-v2",
+        "frames": [{
+            "dense_rank": 1,
+            "dense_score": 0.97,
+            "frame_idx": 53,
+            "pts_time": 2.12,
+            "fps": 25.0,
+            "keyframe_path": str(tmp_path / "dense.jpg"),
+            "dense_frame": True,
+            "mapping_status": "DECODED_FRAME_REQUIRES_VISUAL_CONFIRMATION",
+        }],
+    })
+
+    payload = service.submission_refine_candidate(
+        "submission-1",
+        "query-dense",
+        "person opens a door",
+        "L21_V001",
+        seed_keyframe_id=2,
+        radius_seconds=20,
+        frame_limit=4,
+        use_gemini=False,
+        use_dense=True,
+    )
+
+    assert payload["schema_version"] == "candidate-local-refinement-v2"
+    assert payload["refinement"]["method"] == "decoded_video_clip"
+    assert payload["frames"][0]["dense_frame"] is True
+    assert payload["frames"][0]["frame_idx"] == 53
+    assert payload["frames"][0]["refinement_channels"] == ["dense_clip"]
+
+
+@pytest.mark.parametrize(
+    ("minutes", "seconds", "message"),
+    [(-1, 0.0, "minutes"), (0, -0.1, "seconds"), (0, 60.0, "seconds")],
+)
+def test_time_to_frame_rejects_invalid_clock_values(
+    tmp_path: Path,
+    minutes: int,
+    seconds: float,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        make_service(tmp_path).time_to_frame("L21_V001", minutes, seconds)
+
+
+def test_client_disconnect_classifier_does_not_hide_storage_errors() -> None:
+    assert _is_client_disconnect_error(OSError(22, "client closed socket")) is True
+    assert _is_client_disconnect_error(BrokenPipeError()) is True
+    assert _is_client_disconnect_error(OSError(5, "storage access denied")) is False
 
 
 def test_qa_prepare_uses_retrieval_query_but_keeps_original_event_query(tmp_path: Path) -> None:

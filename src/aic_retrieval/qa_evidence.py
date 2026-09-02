@@ -52,12 +52,16 @@ def build_evidence_pack(
     metadata_by_video = metadata_by_video or {}
     candidates = _candidate_rows(retrieval_response)
     refs: list[EvidenceRef] = []
-    counts: dict[EvidenceModality, int] = {modality: 0 for modality in EvidenceModality}
+    counts_by_video: dict[str, dict[EvidenceModality, int]] = {}
 
     for candidate in candidates:
         video_id = str(candidate.get("video_id", "")).strip()
         if not video_id:
             continue
+        counts = counts_by_video.setdefault(
+            video_id,
+            {modality: 0 for modality in EvidenceModality},
+        )
         for frame in _candidate_frames(candidate):
             refs.extend(_frame_evidence(frame, video_id, retrieval_response, availability, counts, max_evidence_per_modality))
         metadata = metadata_by_video.get(video_id)
@@ -125,15 +129,21 @@ def _frame_evidence(
     frame_idx = _optional_int(frame.get("frame_idx", frame.get("best_frame_idx")))
     timestamp = _optional_float(frame.get("pts_time", frame.get("best_pts_time")))
     if keyframe_id is not None and counts[EvidenceModality.KEYFRAME] < limit:
+        dense_frame = bool(frame.get("dense_frame"))
         refs.append(_ref(
             EvidenceModality.KEYFRAME,
             video_id,
             keyframe_id,
             frame_idx,
             timestamp,
-            {"keyframe_path": frame.get("keyframe_path", frame.get("best_keyframe_path"))},
-            "retrieval_frame",
-            _version(response, "index_schema_version"),
+            {
+                "keyframe_path": frame.get("keyframe_path", frame.get("best_keyframe_path")),
+                "dense_frame": dense_frame,
+                "source_keyframe_id": frame.get("source_keyframe_id"),
+                "mapping_status": frame.get("mapping_status"),
+            },
+            "decoded_video_frame" if dense_frame else "retrieval_frame",
+            "dense-frame-localization-v2" if dense_frame else _version(response, "index_schema_version"),
         ))
         counts[EvidenceModality.KEYFRAME] += 1
     if (frame.get("clip_score") is not None or frame.get("clip_rank") is not None) and counts[EvidenceModality.CLIP] < limit:
@@ -255,7 +265,8 @@ def _retrieval_context(response: Mapping[str, Any]) -> dict[str, Any]:
         "index_schema_version", "index_fingerprint", "phase5_store_version", "phase6_config_version",
         "qa_event_query", "qa_retrieval_query",
         "qa_hybrid_retrieval", "profile", "health", "failures", "channel_hit_counts", "latency_ms",
-        "agent_trace", "structured_constraints", "fusion_method",
+        "agent_trace", "structured_constraints", "fusion_method", "qa_deep_frame_search", "frame_localization",
+        "qa_gemini_frame_reranker", "gemini_frame_rerank",
     )
     return {key: response[key] for key in keys if key in response}
 

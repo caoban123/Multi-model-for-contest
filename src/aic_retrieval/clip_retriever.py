@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, Sequence
 
 import numpy as np
 
@@ -14,6 +14,8 @@ CLIP_RETRIEVER_VERSION = "clip-numpy-adapter-v1"
 
 class ClipQueryEncoder(Protocol):
     def encode_text(self, text: str) -> np.ndarray: ...
+
+    def encode_texts(self, texts: list[str]) -> np.ndarray: ...
 
 
 class ClipRetriever:
@@ -68,6 +70,24 @@ class ClipRetriever:
         )
 
     def search(self, request: RetrievalRequest) -> list[RetrievalHit]:
+        query_vector = self.encoder.encode_text(request.query_text)
+        return self._search_vector(request, query_vector)
+
+    def search_many(self, requests: Sequence[RetrievalRequest]) -> list[list[RetrievalHit]]:
+        if not requests:
+            return []
+        texts = [request.query_text for request in requests]
+        encode_many = getattr(self.encoder, "encode_texts", None)
+        vectors = (
+            encode_many(texts)
+            if callable(encode_many)
+            else np.stack([self.encoder.encode_text(text) for text in texts])
+        )
+        if len(vectors) != len(requests):
+            raise ValueError("CLIP batch encoder returned an unexpected vector count")
+        return [self._search_vector(request, vector) for request, vector in zip(requests, vectors)]
+
+    def _search_vector(self, request: RetrievalRequest, query_vector: np.ndarray) -> list[RetrievalHit]:
         active_groups = set(request.groups) & set(self.groups)
         if not active_groups:
             return []
@@ -75,7 +95,6 @@ class ClipRetriever:
         if source_filter and not ({"clip", "visual"} & source_filter):
             return []
         video_filter = {str(item) for item in request.filters.get("video_ids", ())}
-        query_vector = self.encoder.encode_text(request.query_text)
         needs_filter = bool(video_filter or active_groups != set(self.groups))
         pool = len(self.refs) if needs_filter else min(len(self.refs), request.top_k)
         raw = search_numpy_index(self.index, self.refs, query_vector, pool)

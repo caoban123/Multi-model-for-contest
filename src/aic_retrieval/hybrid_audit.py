@@ -13,16 +13,14 @@ from typing import Any, Iterable
 
 import numpy as np
 
+from aic_retrieval.resilient_io import sha256_file_with_retry
+
 
 AUDIT_SCHEMA_VERSION = "hybrid-retrieval-audit-v1"
 
 
 def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(chunk_size):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_file_with_retry(path, chunk_size=chunk_size)
 
 
 def _load_json(path: Path) -> Any:

@@ -34,3 +34,37 @@ def test_workflow_rejects_confirmation_without_selected_evidence() -> None:
     _, draft = workflow.draft(state.session.session_id)
     with pytest.raises(ValueError, match="selected evidence"):
         workflow.review(state.session.session_id, draft.draft_id, ReviewDecision.CONFIRMED, None, (), "tester")
+
+
+def test_workflow_rejects_cross_video_evidence_before_drafting() -> None:
+    response = _response()
+    response["video_results"].append({
+        "video_id": "L21_V002",
+        "rank": 2,
+        "frames": [{
+            "video_id": "L21_V002",
+            "keyframe_id": 7,
+            "frame_idx": 210,
+            "pts_time": 7.0,
+            "evidence": {"ocr": [{"matched_text": "News", "confidence": .9}], "asr": [], "object": [], "attribute": []},
+        }],
+    })
+    workflow = QaWorkflow()
+    state = workflow.prepare(
+        QaRequest("q3", "a sign", "Bien hieu ghi gi?"),
+        response,
+        modality_availability={EvidenceModality.OCR: AvailabilityStatus.AVAILABLE},
+    )
+    first = next(item.evidence_id for item in state.pack.evidence_refs if item.video_id == "L21_V001")
+    second = next(item.evidence_id for item in state.pack.evidence_refs if item.video_id == "L21_V002")
+
+    with pytest.raises(ValueError, match="exactly one video"):
+        workflow.draft(state.session.session_id, (first, second))
+
+
+def test_workflow_rejects_unknown_evidence_before_drafting() -> None:
+    workflow = QaWorkflow()
+    state = workflow.prepare(QaRequest("q4", "a sign", "Bien hieu ghi gi?"), _response())
+
+    with pytest.raises(ValueError, match="not present"):
+        workflow.draft(state.session.session_id, ("missing-evidence",))

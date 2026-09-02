@@ -1,0 +1,16 @@
+{
+  "extends": "phase8_trake_v2.json",
+  "vlm": {
+    "enabled": true,
+    "provider": "gemini",
+    "model": "gemini-3.5-flash",
+    "network_calls_allowed": true,
+    "decision_log_approved": true,
+    "top_n": 3,
+    "low_confidence_margin": 0.05,
+    "low_linkage_threshold": 0.4
+  },
+  "features": {
+    "conditional_vlm": true
+  }
+}

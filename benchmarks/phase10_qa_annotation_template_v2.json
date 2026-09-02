@@ -1,0 +1,28 @@
+{
+  "version": "phase10-qa-annotations-v2",
+  "split": "development",
+  "annotation_status": "UNLABELLED_TEMPLATE",
+  "label_policy": {
+    "timestamp_unit": "pts_seconds",
+    "frame_ranges_are_official_frame_indices": true,
+    "multiple_semantically_equivalent_answers_allowed": true,
+    "holdout_must_not_be_used_for_tuning": true
+  },
+  "queries": [
+    {
+      "query_id": "",
+      "event_query_vi": "",
+      "question_vi": "",
+      "question_type": "VISUAL",
+      "expected_video_ids": [],
+      "accepted_pts_ranges": [],
+      "accepted_frame_ranges": [],
+      "expected_answers": [],
+      "required_modalities": ["keyframe"],
+      "unanswerable_from_available_evidence": false,
+      "annotator": "",
+      "annotated_at": null,
+      "notes": "Do not mark LABELLED until video, time/frame ranges and accepted answers have been manually verified."
+    }
+  ]
+}

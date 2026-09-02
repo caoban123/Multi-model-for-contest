@@ -32,6 +32,7 @@ def test_trake_routes_are_separate_and_bad_session_is_http_400(tmp_path: Path, m
             if session_id == "domain": raise TrakeDomainError("NO_FEASIBLE_VIDEO", "no feasible video", stage="TEMPORAL_FEASIBILITY_FAILURE")
             if session_id == "boom": raise RuntimeError("private stack detail")
             return {"state":{"session_id":session_id,"alignments":[]}}
+        def trake_verify(self, session_id): return {"status":"DISABLED","called":False,"session_id":session_id}
         def trake_session(self, session_id): return {"state":{"session_id":session_id}}
         def trake_sessions(self): return {"sessions":[]}
     monkeypatch.setattr(retrieval_ui,"RetrievalUiService",FakeService)
@@ -42,6 +43,7 @@ def test_trake_routes_are_separate_and_bad_session_is_http_400(tmp_path: Path, m
         assert post(port,"/api/trake/plan",{"query":"first then second"})["state"]["session_id"] == "trake-1"
         assert post(port,"/api/trake/search",{"session_id":"trake-1"})["state"]["videos"] == []
         assert post(port,"/api/trake/align",{"session_id":"trake-1"})["state"]["alignments"] == []
+        assert post(port,"/api/trake/verify",{"session_id":"trake-1"})["status"] == "DISABLED"
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/trake/health") as response:
             assert json.load(response)["vlm_enabled"] is False
         try: post(port,"/api/trake/search",{"session_id":"missing"})

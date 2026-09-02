@@ -91,6 +91,8 @@ def test_retrieval_ui_has_opt_in_agent_hybrid_mode_and_trace() -> None:
         assert f'id="{control_id}"' in html
     assert "/api/agent-search" in script
     assert "renderAgentPlan" in script
+    assert "visual_clip_queries_en" in script
+    assert "CLIP visual queries" in html
     assert "source_filters" in script
     assert "retriever_ranks" in script
     assert "agent_trace" in script
@@ -181,3 +183,14 @@ def test_retrieval_ui_has_raw_video_preview_flow() -> None:
     assert "pin-actions" in script
     assert ".video-dialog" in styles
     assert ".open-video-button[hidden]" in styles
+
+
+def test_submission_ui_has_reset_button() -> None:
+    html = (ROOT / "web" / "submission_ui" / "index.html").read_text(encoding="utf-8")
+    script = (ROOT / "web" / "submission_ui" / "app.js").read_text(encoding="utf-8")
+    styles = (ROOT / "web" / "submission_ui" / "styles.css").read_text(encoding="utf-8")
+
+    assert 'id="reset-button"' in html
+    assert "resetFormAndWorkspace" in script
+    assert "resetReviewWorkspace" in script
+    assert ".form-actions" in styles

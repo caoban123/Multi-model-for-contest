@@ -11,7 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import numpy as np
 
@@ -36,12 +36,13 @@ from aic_retrieval.text_encoder import DEFAULT_CLIP_MODEL_ID, ClipTextEncoder
 from aic_retrieval.translation import DEFAULT_GEMINI_API_URL, ExternalTranslator, TranslationConfig
 from aic_retrieval.phase5_store import Phase5SearchService
 from aic_retrieval.query_planner import RuleBasedQueryPlanner
-from aic_retrieval.hybrid_query_planner import HybridQueryPlan, HybridQueryPlanner
+from aic_retrieval.hybrid_query_planner import HybridQueryPlan, HybridQueryPlanner, HybridTextCoverage
 from aic_retrieval.hybrid_engine import HybridRetrievalEngine
 from aic_retrieval.rrf_fusion import RrfFusionConfig
 from aic_retrieval.clip_retriever import ClipRetriever
 from aic_retrieval.bge_retriever import BgeEncoder, BgeRetriever
 from aic_retrieval.bm25_retriever import Bm25Retriever
+from aic_retrieval.retrievers import RetrievalRequest
 from aic_retrieval.reranking import RerankerConfig, load_reranker_config, rerank_video_results, reranker_metadata, with_top_n
 from aic_retrieval.qa_schema import AvailabilityStatus, EvidenceModality, QaRequest, ReviewDecision
 from aic_retrieval.qa_workflow import QaWorkflow, jsonable, state_payload
@@ -53,9 +54,13 @@ from aic_retrieval.trake_store import TrakeStore
 from aic_retrieval.trake_refinement import DenseRefiner, DenseWindowExpander
 from aic_retrieval.trake_config import TrakeRuntimeConfig, load_trake_config
 from aic_retrieval.trake_hybrid import retrieve_trake_hybrid_channels
-from aic_retrieval.submission_official import OfficialPrediction, OfficialQuery
+from aic_retrieval.submission_official import OfficialPrediction, OfficialQuery, parse_official_csv
 from aic_retrieval.submission_session import SubmissionSessionStore
 from aic_retrieval.provenance import fingerprint_json
+from aic_retrieval.frame_localization import FrameLocalizationConfig, FrameLocalizer
+from aic_retrieval.dense_frame_localization import DenseFrameLocalizationConfig, DenseFrameLocalizer
+from aic_retrieval.gemini_visual_reranker import GeminiVisualReranker
+from aic_retrieval.gemini_trake_verifier import GeminiTrakeVerifier
 
 
 DEFAULT_TOP_K_VIDEOS = 12
@@ -99,6 +104,8 @@ class RetrievalUiConfig:
     submission_store_path: Path | None = None
     submission_output_dir: Path | None = None
     submission_static_dir: Path | None = None
+    dense_frame_enabled: bool = False
+    dense_frame_cache_dir: Path | None = None
 
 
 class TimedEventResults(dict[str, list[dict[str, Any]]]):
@@ -142,6 +149,7 @@ class RetrievalUiService:
             self.refs_by_video.setdefault(ref.video_id, []).append(ref)
         for video_refs in self.refs_by_video.values():
             video_refs.sort(key=lambda ref: (ref.pts_time, ref.keyframe_id))
+        self.frame_localizer = FrameLocalizer(self.index, self.refs)
         self.metadata_by_video = {
             doc.video_id: {
                 "title": doc.title, "author": doc.author, "channel_id": doc.channel_id,
@@ -153,6 +161,23 @@ class RetrievalUiService:
         self.encoder: ClipTextEncoder | None = None
         self.trake_text_embedding_cache: dict[tuple[str, str], np.ndarray] = {}
         self.translator = ExternalTranslator(config.translation or TranslationConfig())
+        gemini_visual_config = self.translator.config
+        if gemini_visual_config.provider != "gemini":
+            gemini_visual_config = TranslationConfig(
+                api_key=gemini_visual_config.api_key,
+                api_url=DEFAULT_GEMINI_API_URL,
+                model=gemini_visual_config.model,
+                provider="gemini",
+                timeout_seconds=gemini_visual_config.timeout_seconds,
+            )
+        self.gemini_visual_reranker = GeminiVisualReranker(
+            gemini_visual_config,
+            path_resolver=self.resolve_keyframe_path,
+        )
+        self.gemini_trake_verifier = GeminiTrakeVerifier(
+            gemini_visual_config,
+            path_resolver=self.resolve_keyframe_path,
+        )
         self.object_service: ObjectSearchService | None = None
         if config.object_store_path is not None and config.object_store_path.is_file():
             aliases_path = config.object_aliases_path or config.repo_root / "config" / "object_aliases_v1.json"
@@ -164,7 +189,17 @@ class RetrievalUiService:
         self.attribute_service = ColorAttributeService(config.repo_root, self.refs)
         self.phase5_service = Phase5SearchService(config.phase5_store_path, self.refs) if config.phase5_store_path else None
         self.query_planner = RuleBasedQueryPlanner()
-        self.hybrid_query_planner = HybridQueryPlanner(config.translation)
+        phase5_stats = self.phase5_service.stats if self.phase5_service else {}
+        self.hybrid_query_planner = HybridQueryPlanner(
+            config.translation,
+            HybridTextCoverage(
+                ocr_records=int(phase5_stats.get("ocr_records", 0)),
+                ocr_videos=int(phase5_stats.get("ocr_videos", 0)),
+                asr_segments=int(phase5_stats.get("asr_segments", 0)),
+                asr_videos=int(phase5_stats.get("asr_videos", 0)),
+                total_videos=len(self.refs_by_video),
+            ),
+        )
         self.hybrid_engine = self._build_hybrid_engine() if config.hybrid_enabled else None
         self.reranker_config = load_reranker_config(config.phase6_config_path) if config.phase6_config_path and config.phase6_config_path.is_file() else RerankerConfig()
         phase6_payload = json.loads(config.phase6_config_path.read_text(encoding="utf-8")) if config.phase6_config_path and config.phase6_config_path.is_file() else {}
@@ -185,8 +220,8 @@ class RetrievalUiService:
             "clip": Availability.AVAILABLE if retrieval_settings.clip_enabled else Availability.UNAVAILABLE,
             "object": Availability.AVAILABLE if retrieval_settings.object_enabled and self.object_service else Availability.UNAVAILABLE,
             "attribute": Availability.AVAILABLE if retrieval_settings.attribute_enabled and self.attribute_service.available else Availability.UNAVAILABLE,
-            "ocr": Availability.UNKNOWN if retrieval_settings.ocr_enabled and self.phase5_service and self.phase5_service.available else Availability.UNAVAILABLE,
-            "asr": Availability.UNKNOWN if retrieval_settings.asr_enabled and self.phase5_service and self.phase5_service.available else Availability.UNAVAILABLE,
+            "ocr": Availability.UNKNOWN if retrieval_settings.ocr_enabled and self.phase5_service and self.phase5_service.ocr_available else Availability.UNAVAILABLE,
+            "asr": Availability.UNKNOWN if retrieval_settings.asr_enabled and self.phase5_service and self.phase5_service.asr_available else Availability.UNAVAILABLE,
             "metadata": Availability.AVAILABLE if retrieval_settings.metadata_enabled and self.metadata_docs else Availability.UNAVAILABLE,
         }
         phase5_version = _sqlite_metadata_value(config.phase5_store_path, "store_version")
@@ -202,6 +237,17 @@ class RetrievalUiService:
             "mapping_version": self.index_metadata.get("mapping_source_fingerprint"),
         }
         refinement_dir = config.trake_refinement_dir or (config.repo_root / "artifacts" / "trake" / "refinement")
+        dense_frame_cache_dir = config.dense_frame_cache_dir or (config.repo_root / "artifacts" / "dense_frames")
+        self.dense_frame_localizer = (
+            DenseFrameLocalizer(
+                self.resolve_video_path,
+                self._trake_frame_scores,
+                dense_frame_cache_dir,
+                model_fingerprint=clip_model_fingerprint,
+            )
+            if config.dense_frame_enabled
+            else None
+        )
         self.trake_window_expander = DenseWindowExpander(
             config.repo_root,
             self.assets_by_video,
@@ -212,6 +258,7 @@ class RetrievalUiService:
             config_fingerprint=self.trake_runtime_config.fingerprint,
             index_fingerprint=index_fingerprint,
             candidates_per_event=self.trake_runtime_config.dante.dense_candidates_per_event,
+            video_resolver=self.resolve_video_path,
         )
         self.trake_workflow = TrakeWorkflow(
             self._trake_retrieve_event,
@@ -221,12 +268,14 @@ class RetrievalUiService:
             session_provenance=session_provenance,
             request_retriever=self._trake_retrieve_request,
             window_expander=self.trake_window_expander,
+            vlm_verifier=self.gemini_trake_verifier,
         )
         self.trake_refiner = DenseRefiner(
             config.repo_root, self.assets_by_video,
             refinement_dir,
             self._trake_frame_scores,
             config=self.trake_runtime_config.refinement.to_refinement_config(),
+            video_resolver=self.resolve_video_path,
         )
 
     def _trake_retrieve_request(self, request: TrakeRequest, pool_size: int) -> dict[str, list[dict[str, Any]]]:
@@ -257,7 +306,7 @@ class RetrievalUiService:
                 if hybrid_plan is not None:
                     if "clip" not in hybrid_plan.enabled_retrievers:
                         continue
-                    variants = (hybrid_plan.visual_clip_query_en,)
+                    variants = hybrid_plan.clip_queries()
                 else:
                     variants = (
                         tuple(dict.fromkeys((event.visual_query or event.clip_query, *event.query_variants)))
@@ -473,6 +522,33 @@ class RetrievalUiService:
     def trake_export(self, session_id: str, review_id: str) -> dict[str, Any]:
         return self.trake_workflow.export(session_id, review_id)
 
+    def trake_verify(self, session_id: str) -> dict[str, Any]:
+        state = self.trake_workflow._state(session_id)
+        event_by_id = {event.event_id: event for event in state.request.events}
+        chains = []
+        seen: set[str] = set()
+        ordered = []
+        if state.manual_chain is not None:
+            ordered.append(state.manual_chain)
+        ordered.extend(chain for result in state.alignments for chain in result.chains)
+        for chain in ordered:
+            if chain.chain_id in seen:
+                continue
+            row = chain.to_dict()
+            for entry in row.get("events", []):
+                event = event_by_id.get(str(entry.get("event_id") or ""))
+                entry["description"] = event.text if event is not None else ""
+            chains.append(row)
+            seen.add(chain.chain_id)
+        payload = {
+            "query": state.request.original_query,
+            "event_descriptions": [event.text for event in state.request.events],
+            "event_confidences": [event.confidence for event in state.request.events],
+            "ood_event": any("OOD" in warning.upper() for warning in state.decomposition_warnings),
+            "chains": chains,
+        }
+        return self.trake_workflow.maybe_verify_with_vlm(payload)
+
     def _trake_frame_scores(self, text: str, images: list[Any]) -> list[float]:
         text_vector = self._encoder().encode_text(text)
         image_vectors = self._encoder().encode_images(images)
@@ -489,7 +565,7 @@ class RetrievalUiService:
         result = self.trake_refiner.refine(video_id=chain.video_id,event_id=event_id,event_text=event.clip_query,source_keyframe_id=entry.candidate.keyframe_id,source_frame_idx=entry.candidate.frame_idx,source_pts_time=entry.candidate.pts_time,fps=fps)
         payload=result.to_dict(); payload.update({"refinement_id":f"refine-{int(time.time()*1000)}-{event_id}","session_id":session_id,"chain_id":chain_id,"created_at":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime())})
         if self.trake_workflow.store: self.trake_workflow.store.append_refinement(payload)
-        if payload.get("refined_image_path"): payload["image_url"]="/keyframe?path="+payload["refined_image_path"]
+        if payload.get("refined_image_path"): payload["image_url"] = _keyframe_url(payload["refined_image_path"])
         return {"refinement":payload}
 
     def search(
@@ -613,6 +689,8 @@ class RetrievalUiService:
         reranker_top_n: int = 20,
         query_variants: tuple[str, ...] | None = None,
         restrict_structured_to_clip_candidates: bool = False,
+        ocr_query: str | None = None,
+        asr_query: str | None = None,
     ) -> dict[str, Any]:
         query = query.strip()
         if not query:
@@ -632,7 +710,8 @@ class RetrievalUiService:
         if enable_attributes and not attribute_constraints:
             raise ValueError("attribute_color is required when attributes are enabled and no color is found in the query")
         structured_query = StructuredQuery(
-            visual_text=query, enable_clip=enable_clip, enable_objects=enable_objects, enable_metadata=enable_metadata, enable_attributes=enable_attributes,
+            visual_text=query, ocr_text=(ocr_query or query).strip(), asr_text=(asr_query or query).strip(),
+            enable_clip=enable_clip, enable_objects=enable_objects, enable_metadata=enable_metadata, enable_attributes=enable_attributes,
             enable_ocr=enable_ocr, enable_asr=enable_asr,
             clip_mode="soft" if enable_clip else "disabled", object_constraints=object_constraints, attribute_constraints=attribute_constraints,
             attribute_mode=attribute_filter_mode if enable_attributes else "disabled",
@@ -757,8 +836,8 @@ class RetrievalUiService:
         phase5_service = getattr(self, "phase5_service", None)
         enable_objects = bool(suggestions.get("enable_objects") and suggestions.get("object_label") and object_service)
         enable_attributes = bool(suggestions.get("enable_attributes") and suggestions.get("attribute_color") and attribute_service and attribute_service.available)
-        enable_ocr = bool(suggestions.get("enable_ocr") and phase5_service and phase5_service.available)
-        enable_asr = bool(suggestions.get("enable_asr") and phase5_service and phase5_service.available)
+        enable_ocr = bool(suggestions.get("enable_ocr") and phase5_service and phase5_service.ocr_available)
+        enable_asr = bool(suggestions.get("enable_asr") and phase5_service and phase5_service.asr_available)
         enable_metadata = bool(
             suggestions.get("enable_metadata")
             and getattr(self, "metadata_docs", None)
@@ -796,6 +875,8 @@ class RetrievalUiService:
                 metadata_filter_mode="soft",
                 fusion_method="rrf",
                 restrict_structured_to_clip_candidates=True,
+                ocr_query=plan.lexical_text_query,
+                asr_query=plan.semantic_text_query,
             )
         except (ValueError, RuntimeError, OSError, sqlite3.Error) as exc:
             return hybrid_results, {
@@ -890,6 +971,11 @@ class RetrievalUiService:
         retrieval_query: str | None = None,
         use_hybrid_retrieval: bool = False,
         use_gemini_planner: bool = True,
+        deep_frame_search: bool = False,
+        frame_search_radius_seconds: float = 40.0,
+        frame_search_limit: int = 12,
+        use_gemini_frame_reranker: bool = False,
+        use_dense_frames: bool = True,
     ) -> dict[str, Any]:
         request = QaRequest(query_id, event_query, question, selected_video_id, selected_frame_id)
         search_query = (retrieval_query or event_query).strip()
@@ -905,19 +991,308 @@ class RetrievalUiService:
             "qa_event_query": event_query,
             "qa_retrieval_query": search_query,
             "qa_hybrid_retrieval": use_hybrid_retrieval,
+            "qa_deep_frame_search": deep_frame_search,
+            "qa_gemini_frame_reranker": use_gemini_frame_reranker,
             "index_schema_version": self.index_metadata.get("index_schema_version"),
             "index_fingerprint": self.index_metadata.get("feature_source_fingerprint"),
             "phase5_store_version": "phase5-store-v1" if getattr(self, "phase5_service", None) and self.phase5_service.available else None,
             "phase6_config_version": self.reranker_config.__class__.__name__,
         }
+        if deep_frame_search and not selected_video_id:
+            response = self._qa_localize_frames(
+                response,
+                event_query=event_query,
+                question=question,
+                use_gemini_planner=use_gemini_planner,
+                radius_seconds=frame_search_radius_seconds,
+                frame_limit=frame_search_limit,
+                use_dense_frames=use_dense_frames,
+            )
+        if use_gemini_frame_reranker and not selected_video_id:
+            response = self._qa_rerank_frames_with_gemini(
+                response,
+                query=f"{event_query.strip()}\nQuestion: {question.strip()}",
+            )
+        response = self._enrich_qa_response(response)
+        candidate_video_ids = {
+            str(item.get("video_id") or "")
+            for item in response.get("video_results") or response.get("video_groups") or response.get("results") or []
+            if isinstance(item, dict) and item.get("video_id")
+        }
         state = self.qa_workflow.prepare(
             request,
             response,
-            metadata_by_video=self.metadata_by_video,
+            metadata_by_video={video_id: self.video_metadata(video_id) for video_id in candidate_video_ids},
             modality_availability=self.qa_modality_availability(),
             max_evidence_per_modality=8,
         )
         return self.qa_workflow.payload(state)
+
+    def _qa_localize_frames(
+        self,
+        response: dict[str, Any],
+        *,
+        event_query: str,
+        question: str,
+        use_gemini_planner: bool,
+        radius_seconds: float,
+        frame_limit: int,
+        use_dense_frames: bool = True,
+    ) -> dict[str, Any]:
+        key = next((name for name in ("video_results", "video_groups", "results") if isinstance(response.get(name), list)), None)
+        if key is None:
+            return {**response, "frame_localization": {"status": "UNAVAILABLE", "reason": "retrieval response has no candidates"}}
+        radius_seconds = max(5.0, min(float(radius_seconds), 180.0))
+        frame_limit = max(3, min(int(frame_limit), 30))
+        visual_query = str(response.get("query_plan", {}).get("visual_clip_query_en") or "").strip()
+        planner_trace: dict[str, Any] | None = None
+        if question.strip():
+            try:
+                planning = self.hybrid_query_planner.plan_with_trace(
+                    f"{event_query.strip()}\nQuestion focus: {question.strip()}",
+                    use_gemini=use_gemini_planner,
+                )
+                visual_query = planning.plan.visual_clip_query_en
+                planner_trace = planning.trace.to_dict()
+            except (ValueError, RuntimeError, OSError) as exc:
+                planner_trace = {"status": "FALLBACK", "error": f"{type(exc).__name__}: {exc}"}
+        visual_query = visual_query or str(response.get("query") or event_query).strip()
+        try:
+            started = time.perf_counter()
+            query_vector = self._encoder().encode_text(visual_query)
+            localized = self.frame_localizer.localize(
+                response[key],
+                query_vector,
+                config=FrameLocalizationConfig(
+                    video_top_k=min(12, len(response[key]) or 1),
+                    radius_seconds=radius_seconds,
+                    max_frames_per_video=frame_limit,
+                    min_gap_seconds=1.5,
+                ),
+                query_text=visual_query,
+            )
+            if use_dense_frames:
+                localized, dense_trace = self._dense_localize_candidates(
+                    localized,
+                    visual_query,
+                    radius_seconds=radius_seconds,
+                    frame_limit=frame_limit,
+                    video_limit=4,
+                )
+            else:
+                dense_trace = {"status": "DISABLED", "reason": "disabled by operator"}
+            trace = {
+                "status": "APPLIED",
+                "version": "qa-stage-b-frame-localization-v2",
+                "query": visual_query,
+                "radius_seconds": radius_seconds,
+                "frame_limit": frame_limit,
+                "latency_ms": round((time.perf_counter() - started) * 1000, 3),
+                "planner_trace": planner_trace,
+                "video_rank_preserved": True,
+                "dense_video": dense_trace,
+            }
+            updated = {**response, key: localized, "frame_localization": trace}
+            if key == "video_results" and isinstance(response.get("video_groups"), list):
+                updated["video_groups"] = localized
+            return updated
+        except (ImportError, ValueError, RuntimeError, OSError) as exc:
+            return {
+                **response,
+                "frame_localization": {
+                    "status": "FALLBACK",
+                    "version": "qa-stage-b-frame-localization-v2",
+                    "query": visual_query,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "video_rank_preserved": True,
+                },
+            }
+
+    def _dense_localize_candidates(
+        self,
+        candidates: list[dict[str, Any]],
+        visual_query: str,
+        *,
+        radius_seconds: float,
+        frame_limit: int,
+        video_limit: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        localizer = getattr(self, "dense_frame_localizer", None)
+        if localizer is None:
+            return candidates, {
+                "status": "DISABLED",
+                "reason": "dense frame localization is not enabled in the runtime profile",
+            }
+        output: list[dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
+        for position, source in enumerate(candidates):
+            candidate = dict(source)
+            if position >= video_limit:
+                output.append(candidate)
+                continue
+            video_id = str(candidate.get("video_id") or "").strip()
+            refs = list(self.refs_by_video.get(video_id, ()))
+            seed_times = _candidate_seed_times(candidate)
+            if not video_id or not refs or not seed_times:
+                results.append({
+                    "video_id": video_id,
+                    "status": "FALLBACK",
+                    "reason": "candidate has no indexed video, FPS or seed timestamp",
+                })
+                output.append(candidate)
+                continue
+            dense = localizer.localize(
+                video_id=video_id,
+                query_text=visual_query,
+                seed_times=seed_times[:4],
+                fps=float(refs[0].fps),
+                config=DenseFrameLocalizationConfig(
+                    radius_seconds=max(5.0, min(float(radius_seconds), 180.0)),
+                    result_limit=max(3, min(int(frame_limit), 30)),
+                ),
+            )
+            results.append({key: value for key, value in dense.items() if key != "frames"})
+            dense_frames = [
+                self._dense_frame_row(video_id, dict(frame), refs)
+                for frame in dense.get("frames", [])
+                if isinstance(frame, dict)
+            ]
+            if dense.get("status") == "APPLIED" and dense_frames:
+                best = dense_frames[0]
+                candidate.update({
+                    "frames": dense_frames,
+                    "best_keyframe_id": best.get("keyframe_id"),
+                    "best_frame_idx": best.get("frame_idx"),
+                    "best_pts_time": best.get("pts_time"),
+                    "best_keyframe_path": best.get("keyframe_path"),
+                    "dense_frame_localization": {key: value for key, value in dense.items() if key != "frames"},
+                })
+            output.append(candidate)
+        applied = sum(item.get("status") == "APPLIED" for item in results)
+        return output, {
+            "status": "APPLIED" if applied else "FALLBACK",
+            "version": "qa-dense-video-localization-v2",
+            "video_limit": video_limit,
+            "videos_attempted": len(results),
+            "videos_applied": applied,
+            "results": results,
+        }
+
+    @staticmethod
+    def _dense_frame_row(video_id: str, frame: dict[str, Any], refs: list[Any]) -> dict[str, Any]:
+        nearest = min(refs, key=lambda ref: (abs(float(ref.pts_time) - float(frame["pts_time"])), ref.keyframe_id))
+        frame.update({
+            "video_id": video_id,
+            "keyframe_id": int(nearest.keyframe_id),
+            "source_keyframe_id": int(nearest.keyframe_id),
+            "source_keyframe_path": nearest.keyframe_path,
+            "clip_rank": int(frame.get("dense_rank") or 0),
+            "clip_score": float(frame.get("dense_score") or 0.0),
+            "localization_rank": int(frame.get("dense_rank") or 0),
+            "localization_score": float(frame.get("dense_score") or 0.0),
+            "is_representative": int(frame.get("dense_rank") or 0) == 1,
+            "anchor_distance_seconds": abs(float(nearest.pts_time) - float(frame["pts_time"])),
+        })
+        return frame
+
+    def _qa_rerank_frames_with_gemini(self, response: dict[str, Any], *, query: str) -> dict[str, Any]:
+        rows = response.get("video_results")
+        if not isinstance(rows, list):
+            return {**response, "gemini_frame_rerank": {"status": "UNAVAILABLE", "reason": "video results are unavailable"}}
+        selected_frames: list[dict[str, Any]] = []
+        for candidate in rows[:4]:
+            if not isinstance(candidate, dict):
+                continue
+            frames = candidate.get("frames") if isinstance(candidate.get("frames"), list) else [candidate]
+            for frame in frames[:3]:
+                if isinstance(frame, dict):
+                    selected_frames.append({**frame, "video_id": candidate.get("video_id")})
+        try:
+            started = time.perf_counter()
+            rerank = self.gemini_visual_reranker.rerank(query, selected_frames)
+            score_by_id = {item["candidate_id"]: item for item in rerank.get("items", [])}
+            updated_rows: list[dict[str, Any]] = []
+            for source in rows:
+                candidate = dict(source)
+                frames = [dict(frame) for frame in candidate.get("frames", []) if isinstance(frame, dict)]
+                for frame in frames:
+                    item = score_by_id.get(f"{candidate.get('video_id')}:k{frame.get('keyframe_id')}")
+                    if item:
+                        frame.update({
+                            "vlm_relevance": item["relevance"],
+                            "vlm_matched_events": item["matched_events"],
+                            "vlm_reason": item["reason"],
+                        })
+                frames.sort(key=lambda frame: (
+                    frame.get("vlm_relevance") is None,
+                    -float(frame.get("vlm_relevance") or 0.0),
+                    int(frame.get("localization_rank") or 10**9),
+                    int(frame.get("keyframe_id") or 10**9),
+                ))
+                if frames and frames[0].get("vlm_relevance") is not None:
+                    for position, frame in enumerate(frames):
+                        frame["is_representative"] = position == 0
+                    best = frames[0]
+                    candidate.update({
+                        "best_keyframe_id": best.get("keyframe_id"),
+                        "best_frame_idx": best.get("frame_idx"),
+                        "best_pts_time": best.get("pts_time"),
+                        "best_keyframe_path": best.get("keyframe_path"),
+                    })
+                candidate["frames"] = frames
+                updated_rows.append(candidate)
+            trace = {
+                **rerank,
+                "latency_ms": round((time.perf_counter() - started) * 1000, 3),
+                "video_rank_preserved": True,
+                "candidate_generation": "system_allowlist_only",
+            }
+            updated = {**response, "video_results": updated_rows, "gemini_frame_rerank": trace}
+            if isinstance(response.get("video_groups"), list):
+                updated["video_groups"] = updated_rows
+            return updated
+        except (ValueError, RuntimeError, OSError) as exc:
+            return {
+                **response,
+                "gemini_frame_rerank": {
+                    "status": "FALLBACK",
+                    "version": "gemini-visual-rerank-v1",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "video_rank_preserved": True,
+                },
+            }
+
+    def _enrich_qa_response(self, response: dict[str, Any]) -> dict[str, Any]:
+        """Attach the same review metadata and media URLs used by KIS candidates."""
+        key = next((name for name in ("video_results", "video_groups", "results") if isinstance(response.get(name), list)), None)
+        if key is None:
+            return response
+        enriched_rows: list[dict[str, Any]] = []
+        for position, source in enumerate(response[key], start=1):
+            if not isinstance(source, dict) or not source.get("video_id"):
+                continue
+            row = dict(source)
+            row["frames"] = [dict(frame) for frame in row.get("frames", []) if isinstance(frame, dict)]
+            if row["frames"]:
+                representative = row["frames"][0]
+                for target, source_name in (
+                    ("best_keyframe_id", "keyframe_id"),
+                    ("best_frame_idx", "frame_idx"),
+                    ("best_pts_time", "pts_time"),
+                    ("best_keyframe_path", "keyframe_path"),
+                ):
+                    if row.get(target) is None:
+                        row[target] = representative.get(source_name)
+                self.enrich_video_result(row)
+            else:
+                self.enrich_result(row)
+            row["candidate_id"] = f"qa:{row['video_id']}:r{row.get('rank', position)}"
+            row["retrieval"] = {
+                "score": row.get("score", row.get("raw_score")),
+                "provenance": row.get("provenance", {}),
+            }
+            enriched_rows.append(row)
+        return {**response, key: enriched_rows}
 
     def qa_draft_answer(self, session_id: str, selected_evidence_ids: tuple[str, ...], answer_method: str = "evidence_first") -> dict[str, Any]:
         answerer = None
@@ -966,8 +1341,8 @@ class RetrievalUiService:
             EvidenceModality.CLIP: AvailabilityStatus.AVAILABLE if len(self.index) else AvailabilityStatus.UNAVAILABLE,
             EvidenceModality.OBJECT: AvailabilityStatus.AVAILABLE if self.object_service is not None else AvailabilityStatus.UNAVAILABLE,
             EvidenceModality.METADATA: AvailabilityStatus.AVAILABLE if self.metadata_docs else AvailabilityStatus.UNAVAILABLE,
-            EvidenceModality.OCR: AvailabilityStatus.AVAILABLE if getattr(self, "phase5_service", None) and self.phase5_service.available else AvailabilityStatus.UNAVAILABLE,
-            EvidenceModality.ASR: AvailabilityStatus.AVAILABLE if getattr(self, "phase5_service", None) and self.phase5_service.available else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.OCR: AvailabilityStatus.AVAILABLE if getattr(self, "phase5_service", None) and self.phase5_service.ocr_available else AvailabilityStatus.UNAVAILABLE,
+            EvidenceModality.ASR: AvailabilityStatus.AVAILABLE if getattr(self, "phase5_service", None) and self.phase5_service.asr_available else AvailabilityStatus.UNAVAILABLE,
             EvidenceModality.ATTRIBUTE: AvailabilityStatus.AVAILABLE if self.attribute_service.available else AvailabilityStatus.UNAVAILABLE,
             EvidenceModality.TEMPORAL: AvailabilityStatus.AVAILABLE if self.refs_by_video else AvailabilityStatus.UNAVAILABLE,
         }
@@ -1050,7 +1425,7 @@ class RetrievalUiService:
         for ref in refs[start:end]:
             item = asdict(ref)
             item["is_center"] = ref.keyframe_id == keyframe_id
-            item["image_url"] = f"/keyframe?path={ref.keyframe_path}" if ref.keyframe_path else None
+            item["image_url"] = _keyframe_url(ref.keyframe_path)
             phase5_service = getattr(self, "phase5_service", None)
             item["phase5_evidence"] = phase5_service.evidence_for_frame(video_id, ref.keyframe_id) if phase5_service else {"ocr": [], "asr": []}
             frames.append(item)
@@ -1064,6 +1439,40 @@ class RetrievalUiService:
             "start_keyframe_id": frames[0]["keyframe_id"] if frames else None,
             "end_keyframe_id": frames[-1]["keyframe_id"] if frames else None,
             "frames": frames,
+        }
+
+    def time_to_frame(self, video_id: str, minutes: int, seconds: float) -> dict[str, Any]:
+        video_id = video_id.strip()
+        if not video_id:
+            raise ValueError("video_id must not be empty")
+        if minutes < 0:
+            raise ValueError("minutes must be non-negative")
+        if seconds < 0 or seconds >= 60:
+            raise ValueError("seconds must be between 0 and less than 60")
+        refs = self.refs_by_video.get(video_id)
+        if not refs:
+            raise ValueError(f"video_id not found in index: {video_id}")
+
+        pts_time = minutes * 60 + seconds
+        nearest = min(refs, key=lambda ref: (abs(float(ref.pts_time) - pts_time), ref.keyframe_id))
+        fps = float(nearest.fps)
+        if fps <= 0:
+            raise ValueError(f"{video_id} has no valid FPS mapping")
+        estimated_frame_idx = max(0, int(round(nearest.frame_idx + (pts_time - float(nearest.pts_time)) * fps)))
+        return {
+            "video_id": video_id,
+            "minutes": minutes,
+            "seconds": seconds,
+            "pts_time": pts_time,
+            "fps": fps,
+            "estimated_frame_idx": estimated_frame_idx,
+            "calculation": "nearest_mapping_anchor_plus_time_delta_times_fps",
+            "mapping_status": "ESTIMATED_FROM_TIMESTAMP_REQUIRES_MANUAL_CONFIRMATION",
+            "nearest_keyframe": {
+                **asdict(nearest),
+                "distance_seconds": abs(float(nearest.pts_time) - pts_time),
+                "image_url": _keyframe_url(nearest.keyframe_path),
+            },
         }
 
     def translate(self, text: str) -> dict[str, Any]:
@@ -1082,7 +1491,7 @@ class RetrievalUiService:
         video_id = result["video_id"]
         metadata = self.video_metadata(video_id)
         keyframe_path = result.get("keyframe_path")
-        result["image_url"] = f"/keyframe?path={keyframe_path}" if keyframe_path else None
+        result["image_url"] = _keyframe_url(keyframe_path)
         result["video_url"] = self.video_url(video_id)
         result["metadata"] = {
             "title": metadata.get("title", ""),
@@ -1096,7 +1505,7 @@ class RetrievalUiService:
     def enrich_video_result(self, result: dict[str, Any]) -> dict[str, Any]:
         video_id = result["video_id"]
         keyframe_path = result.get("best_keyframe_path")
-        result["image_url"] = f"/keyframe?path={keyframe_path}" if keyframe_path else None
+        result["image_url"] = _keyframe_url(keyframe_path)
         result["video_url"] = self.video_url(video_id)
         result["metadata"] = self.enrich_result(
             {
@@ -1106,7 +1515,7 @@ class RetrievalUiService:
         )["metadata"]
         for frame in result.get("frames", []):
             frame_path = frame.get("keyframe_path")
-            frame["image_url"] = f"/keyframe?path={frame_path}" if frame_path else None
+            frame["image_url"] = _keyframe_url(frame_path)
             frame["is_representative"] = (
                 frame.get("keyframe_id") == result.get("best_keyframe_id")
                 and frame.get("frame_idx") == result.get("best_frame_idx")
@@ -1158,7 +1567,15 @@ class RetrievalUiService:
         data_root = (
             raw_data_root if raw_data_root.is_absolute() else self.config.repo_root / raw_data_root
         ).resolve()
-        allowed_roots = (self.config.repo_root.resolve(), data_root)
+        optional_roots = (
+            self.config.dense_frame_cache_dir,
+            self.config.trake_refinement_dir,
+        )
+        allowed_roots = (
+            self.config.repo_root.resolve(),
+            data_root,
+            *(root.resolve() for root in optional_roots if root is not None),
+        )
         for allowed_root in allowed_roots:
             try:
                 path.relative_to(allowed_root)
@@ -1250,7 +1667,7 @@ class RetrievalUiService:
                 "keyframe_id": keyframe_id,
                 "frame_idx": frame_idx,
                 "pts_time": pts_time,
-                "image_url": result.get("image_url") or (f"/keyframe?path={keyframe_path}" if keyframe_path else None),
+                "image_url": result.get("image_url") or _keyframe_url(keyframe_path),
                 "video_url": result.get("video_url"),
                 "metadata": result.get("metadata", {}),
                 "source_type": result.get("source_type"),
@@ -1275,11 +1692,233 @@ class RetrievalUiService:
             "fusion_method": response.get("fusion_method"),
             "structured_constraints": response.get("structured_constraints", {"applied": False}),
             "channel_hit_counts": response.get("channel_hit_counts", {}),
+            "channel_postprocessing": response.get("channel_postprocessing", {}),
             "latency_ms": response.get("latency_ms", {}),
             "health": response.get("health", {}),
             "failures": response.get("failures", {}),
             "candidates": candidates,
         }
+
+    def submission_refine_candidate(
+        self,
+        session_id: str,
+        query_id: str,
+        query: str,
+        video_id: str,
+        *,
+        seed_keyframe_id: int | None = None,
+        radius_seconds: float = 40.0,
+        frame_limit: int = 12,
+        use_gemini: bool = True,
+        use_dense: bool = True,
+    ) -> dict[str, Any]:
+        session = self._submission_store().get(session_id)
+        if session["status"] != "ACTIVE":
+            raise ValueError("submission session is not ACTIVE")
+        query_id = query_id.strip()
+        query = query.strip()
+        video_id = video_id.strip()
+        if not query_id or not query or not video_id:
+            raise ValueError("query_id, query and video_id are required")
+        refs = list(self.refs_by_video.get(video_id, ()))
+        if not refs:
+            raise ValueError(f"video has no indexed keyframes: {video_id}")
+        radius_seconds = max(5.0, min(float(radius_seconds), 180.0))
+        frame_limit = max(3, min(int(frame_limit), 24))
+        seed_ref = None
+        if seed_keyframe_id is not None:
+            seed_ref = next((ref for ref in refs if ref.keyframe_id == int(seed_keyframe_id)), None)
+            if seed_ref is None:
+                raise ValueError(f"unknown keyframe {seed_keyframe_id} for {video_id}")
+
+        planning = self.hybrid_query_planner.plan_with_trace(query, use_gemini=use_gemini)
+        plan = planning.plan
+        visual_query = plan.visual_clip_query_en or query
+        source_candidate: dict[str, Any] = {"video_id": video_id, "rank": 1}
+        if seed_ref is not None:
+            source_candidate["frames"] = [asdict(seed_ref)]
+        started = time.perf_counter()
+        localized = self.frame_localizer.localize(
+            [source_candidate],
+            self._encoder().encode_text(visual_query),
+            config=FrameLocalizationConfig(
+                video_top_k=1,
+                radius_seconds=radius_seconds,
+                max_frames_per_video=frame_limit,
+                min_gap_seconds=1.0,
+                search_full_video_without_seed=True,
+            ),
+            query_text=visual_query,
+        )[0]
+
+        text_hits: dict[str, list[Any]] = {}
+        failures: dict[str, str] = {}
+        channel_timings_ms: dict[str, float] = {}
+        if self.hybrid_engine is not None:
+            for channel in ("bge", "bm25"):
+                if channel not in plan.enabled_retrievers or channel not in self.hybrid_engine.factories:
+                    continue
+                channel_started = time.perf_counter()
+                try:
+                    text_hits[channel] = self.hybrid_engine.search_channel(
+                        channel,
+                        RetrievalRequest(
+                            f"{query_id}:refine:{video_id}:{channel}",
+                            plan.query_for(channel),
+                            groups=tuple(sorted(self.config.groups)),
+                            top_k=min(200, max(40, frame_limit * 6)),
+                            filters={
+                                "source_types": ("ocr", "asr"),
+                                "video_ids": (video_id,),
+                            },
+                        ),
+                    )
+                except Exception as exc:
+                    failures[channel] = f"{type(exc).__name__}: {exc}"
+                channel_timings_ms[channel] = round((time.perf_counter() - channel_started) * 1000, 3)
+
+        frames, accepted_counts = self._fuse_candidate_refinement_frames(
+            video_id,
+            list(localized.get("frames") or []),
+            text_hits,
+            seed_time=float(seed_ref.pts_time) if seed_ref is not None else None,
+            radius_seconds=radius_seconds,
+            frame_limit=frame_limit,
+        )
+        dense_trace: dict[str, Any] = {
+            "status": "DISABLED",
+            "reason": "dense frame localization was not requested",
+        }
+        if use_dense and frames:
+            dense_candidates, dense_trace = self._dense_localize_candidates(
+                [{"video_id": video_id, "rank": 1, "frames": frames}],
+                visual_query,
+                radius_seconds=radius_seconds,
+                frame_limit=frame_limit,
+                video_limit=1,
+            )
+            dense_frames = list(dense_candidates[0].get("frames") or [])
+            if dense_candidates[0].get("dense_frame_localization") and dense_frames:
+                for dense_frame in dense_frames:
+                    dense_rank = int(dense_frame.get("dense_rank") or 0)
+                    dense_frame.update({
+                        "refinement_rank": dense_rank,
+                        "refinement_score": 1.0 / (60.0 + dense_rank),
+                        "refinement_channels": ["dense_clip"],
+                        "refinement_ranks": {"dense_clip": dense_rank},
+                        "refinement_evidence": [],
+                        "image_url": _keyframe_url(dense_frame.get("keyframe_path")),
+                    })
+                frames = dense_frames
+        return {
+            "schema_version": "candidate-local-refinement-v2",
+            "session_id": session_id,
+            "query_id": query_id,
+            "video_id": video_id,
+            "status": "READY_FOR_REVIEW" if frames else "NO_FRAMES",
+            "query_plan": plan.to_dict(),
+            "agent_trace": planning.trace.to_dict(),
+            "refinement": {
+                "method": "decoded_video_clip" if any(frame.get("dense_frame") for frame in frames) else "candidate_video_clip_text_rrf",
+                "visual_query": visual_query,
+                "text_queries": {
+                    channel: plan.query_for(channel)
+                    for channel in ("bge", "bm25")
+                    if channel in plan.enabled_retrievers
+                },
+                "video_allowlist": [video_id],
+                "seed_keyframe_id": seed_ref.keyframe_id if seed_ref is not None else None,
+                "seed_pts_time": float(seed_ref.pts_time) if seed_ref is not None else None,
+                "radius_seconds": radius_seconds,
+                "searched_full_video": seed_ref is None,
+                "frame_limit": frame_limit,
+                "channel_hit_counts": {"clip": len(localized.get("frames") or []), **accepted_counts},
+                "dense_video": dense_trace,
+                "failures": failures,
+                "latency_ms": {**channel_timings_ms, "total": round((time.perf_counter() - started) * 1000, 3)},
+            },
+            "frames": frames,
+            "mapping_warning": "retrieval frame_idx values require visual confirmation before official submission",
+        }
+
+    def _fuse_candidate_refinement_frames(
+        self,
+        video_id: str,
+        clip_frames: list[dict[str, Any]],
+        text_hits: dict[str, list[Any]],
+        *,
+        seed_time: float | None,
+        radius_seconds: float,
+        frame_limit: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        refs = list(self.refs_by_video.get(video_id, ()))
+        refs_by_keyframe = {int(ref.keyframe_id): ref for ref in refs}
+        by_keyframe: dict[int, dict[str, Any]] = {}
+
+        def ensure(ref: Any) -> dict[str, Any]:
+            keyframe_id = int(ref.keyframe_id)
+            if keyframe_id not in by_keyframe:
+                by_keyframe[keyframe_id] = {
+                    **asdict(ref),
+                    "refinement_ranks": {},
+                    "refinement_evidence": [],
+                }
+            return by_keyframe[keyframe_id]
+
+        for fallback_rank, frame in enumerate(clip_frames, 1):
+            keyframe_id = frame.get("keyframe_id")
+            if keyframe_id is None or int(keyframe_id) not in refs_by_keyframe:
+                continue
+            row = ensure(refs_by_keyframe[int(keyframe_id)])
+            row.update({key: value for key, value in frame.items() if value is not None})
+            row.setdefault("refinement_ranks", {})["clip"] = int(frame.get("localization_rank") or fallback_rank)
+
+        accepted_counts: dict[str, int] = {}
+        for channel, hits in text_hits.items():
+            accepted = 0
+            for fallback_rank, hit in enumerate(hits, 1):
+                if str(hit.video_id) != video_id or hit.pts_time is None:
+                    continue
+                if seed_time is not None and abs(float(hit.pts_time) - seed_time) > radius_seconds:
+                    continue
+                ref = refs_by_keyframe.get(int(hit.keyframe_id)) if hit.keyframe_id is not None else None
+                if ref is None:
+                    ref = min(refs, key=lambda item: abs(float(item.pts_time) - float(hit.pts_time)))
+                row = ensure(ref)
+                rank = int(hit.rank or fallback_rank)
+                previous = row["refinement_ranks"].get(channel)
+                row["refinement_ranks"][channel] = rank if previous is None else min(int(previous), rank)
+                row["refinement_evidence"].append({
+                    "retriever": channel,
+                    "rank": rank,
+                    "raw_score": float(hit.raw_score),
+                    "source_type": str(hit.source_type),
+                    "document_id": hit.document_id,
+                    "matched_text": hit.matched_text,
+                    "source_keyframe_id": hit.keyframe_id,
+                    "source_frame_idx": hit.frame_idx,
+                    "source_pts_time": hit.pts_time,
+                    "resolved_keyframe_id": int(ref.keyframe_id),
+                    "resolution": "exact_keyframe" if hit.keyframe_id == ref.keyframe_id else "nearest_keyframe_from_pts_time",
+                    "provenance": dict(hit.provenance),
+                })
+                accepted += 1
+            accepted_counts[channel] = accepted
+
+        ranked: list[dict[str, Any]] = []
+        for row in by_keyframe.values():
+            ranks = {name: int(rank) for name, rank in row.get("refinement_ranks", {}).items()}
+            row["refinement_score"] = sum(1.0 / (60.0 + rank) for rank in ranks.values())
+            row["refinement_channels"] = sorted(ranks)
+            keyframe_path = row.get("keyframe_path")
+            row["image_url"] = _keyframe_url(keyframe_path)
+            ranked.append(row)
+        ranked.sort(key=lambda row: (-float(row["refinement_score"]), float(row["pts_time"]), int(row["keyframe_id"])))
+        selected = ranked[:frame_limit]
+        for rank, row in enumerate(selected, 1):
+            row["refinement_rank"] = rank
+            row["is_representative"] = rank == 1
+        return selected, accepted_counts
 
     def submission_confirm(
         self,
@@ -1316,6 +1955,27 @@ class RetrievalUiService:
     def submission_remove(self, session_id: str, query_id: str) -> dict[str, Any]:
         return self._submission_store().remove_query(session_id, query_id)
 
+    def submission_apply_csv(self, session_id: str, query_id: str, csv_text: str) -> dict[str, Any]:
+        if len(csv_text.encode("utf-8")) > 64 * 1024:
+            raise ValueError("CSV content is too large")
+        session = self._submission_store().get(session_id)
+        existing = next((item for item in session["queries"] if item["query_id"] == query_id), None)
+        if existing is None:
+            raise KeyError(f"unknown submission query: {query_id}")
+        query = parse_official_csv(
+            query_id,
+            existing["task"],
+            csv_text,
+            event_count=existing.get("event_count"),
+        )
+        source = {**existing.get("source", {}), "csv_edited": True}
+        return self._submission_store().confirm_query(
+            session_id,
+            query,
+            mapping_sources=tuple("manual_official" for _ in query.predictions),
+            source=source,
+        )
+
     def submission_import_qa(
         self,
         submission_session_id: str,
@@ -1333,6 +1993,13 @@ class RetrievalUiService:
         if not review.final_answer:
             raise ValueError("Q&A confirmed review has no final answer")
         evidence_by_id = {item.evidence_id: item for item in state.pack.evidence_refs}
+        selected_refs = [
+            evidence_by_id[item]
+            for item in review.selected_evidence_refs
+            if item in evidence_by_id
+        ]
+        if len({item.video_id for item in selected_refs}) != 1:
+            raise ValueError("Q&A submission import requires evidence from exactly one video")
         frame_ref = next(
             (
                 evidence_by_id[item]
@@ -1443,17 +2110,20 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         "default_candidate_pool_size": DEFAULT_CANDIDATE_POOL_SIZE,
                         "structured_search_available": service.object_service is not None,
                         "attribute_search_available": service.attribute_service.available,
-                        "ocr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.available),
-                        "asr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.available),
+                        "ocr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.ocr_available),
+                        "asr_search_available": bool(getattr(service,"phase5_service",None) and service.phase5_service.asr_available),
+                        "phase5_coverage": dict(service.phase5_service.stats) if getattr(service,"phase5_service",None) else {},
                         "query_planner_available": True,
                         "hybrid_retrieval_enabled": service.hybrid_engine is not None,
                         "hybrid_planner_gemini_configured": service.hybrid_query_planner.gemini_configured,
                         "hybrid_retrievers_configured": sorted(service.hybrid_engine.factories) if service.hybrid_engine else [],
+                        "dense_frame_localization_enabled": getattr(service, "dense_frame_localizer", None) is not None,
+                        "dense_frame_cache_dir": str(service.config.dense_frame_cache_dir) if service.config.dense_frame_cache_dir else None,
                         "reranker_available": True,
                         "qa_available": hasattr(service, "qa_prepare"),
                         "qa_persistence": "sqlite" if getattr(service, "qa_workflow", None) and service.qa_workflow.store else "memory_until_p7_5",
                         "trake_available": hasattr(service, "trake_plan"),
-                        "trake_scope": "L21",
+                        "trake_scope": ",".join(sorted(service.config.groups)),
                         "trake_vlm_enabled": bool(getattr(getattr(service, "trake_runtime_config", None), "vlm", None) and service.trake_runtime_config.vlm.enabled),
                         "submission_available": getattr(service, "submission_store", None) is not None,
                     }
@@ -1477,6 +2147,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._handle_metadata_search(parsed.query)
             elif parsed.path == "/api/neighborhood":
                 self._handle_neighborhood(parsed.query)
+            elif parsed.path == "/api/time-to-frame":
+                self._handle_time_to_frame(parsed.query)
             elif parsed.path == "/api/translate":
                 self._handle_translate(parsed.query)
             elif parsed.path == "/api/query-plan":
@@ -1498,6 +2170,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     "vlm_enabled": bool(runtime and runtime.vlm.enabled),
                     "hybrid_retrieval_enabled": getattr(service, "hybrid_engine", None) is not None,
                     "hybrid_retrievers": sorted(getattr(getattr(service, "hybrid_engine", None), "factories", {})),
+                    "dense_video_refinement": getattr(service, "trake_window_expander", None) is not None,
                     "gemini_configured": bool(getattr(getattr(service, "translator", None), "is_configured", False)),
                     "algorithm": getattr(runtime, "algorithm", None),
                     "config_fingerprint": getattr(runtime, "fingerprint", None),
@@ -1527,6 +2200,18 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         use_hybrid=bool(payload.get("use_hybrid", True)),
                         use_gemini=bool(payload.get("use_gemini", True)),
                     )
+                elif self.path == "/api/submission/candidate/refine":
+                    result = service.submission_refine_candidate(
+                        str(payload.get("session_id") or ""),
+                        str(payload.get("query_id") or ""),
+                        str(payload.get("query") or ""),
+                        str(payload.get("video_id") or ""),
+                        seed_keyframe_id=int(payload["seed_keyframe_id"]) if payload.get("seed_keyframe_id") is not None else None,
+                        radius_seconds=float(payload.get("radius_seconds", 40.0)),
+                        frame_limit=int(payload.get("frame_limit", 12)),
+                        use_gemini=bool(payload.get("use_gemini", True)),
+                        use_dense=bool(payload.get("use_dense", True)),
+                    )
                 elif self.path in {"/api/submission/query/confirm", "/api/submission/query/update"}:
                     result = service.submission_confirm(
                         str(payload.get("session_id") or ""),
@@ -1535,6 +2220,12 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         list(payload.get("predictions") or []),
                         event_count=int(payload["event_count"]) if payload.get("event_count") is not None else None,
                         source=dict(payload.get("source") or {}),
+                    )
+                elif self.path == "/api/submission/query/csv":
+                    result = service.submission_apply_csv(
+                        str(payload.get("session_id") or ""),
+                        str(payload.get("query_id") or ""),
+                        str(payload.get("csv_text") or ""),
                     )
                 elif self.path == "/api/submission/query/remove":
                     result = service.submission_remove(str(payload.get("session_id") or ""), str(payload.get("query_id") or ""))
@@ -1570,6 +2261,11 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                         str(payload.get("retrieval_query") or "") or None,
                         bool(payload.get("use_hybrid_retrieval", False)),
                         bool(payload.get("use_gemini_planner", True)),
+                        bool(payload.get("deep_frame_search", False)),
+                        float(payload.get("frame_search_radius_seconds", 40.0)),
+                        int(payload.get("frame_search_limit", 12)),
+                        bool(payload.get("use_gemini_frame_reranker", False)),
+                        bool(payload.get("use_dense_frames", True)),
                     )
                 elif self.path == "/api/qa/draft-answer":
                     result = service.qa_draft_answer(
@@ -1617,6 +2313,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     result = service.trake_export(str(payload.get("session_id") or ""), str(payload.get("review_id") or ""))
                 elif self.path == "/api/trake/refine":
                     result = service.trake_refine(str(payload.get("session_id") or ""), str(payload.get("chain_id") or ""), str(payload.get("event_id") or ""))
+                elif self.path == "/api/trake/verify":
+                    result = service.trake_verify(str(payload.get("session_id") or ""))
                 elif self.path == "/api/trake/save":
                     result = service.trake_session(str(payload.get("session_id") or ""))
                 else:
@@ -1784,6 +2482,19 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 return
             self._json(payload)
 
+        def _handle_time_to_frame(self, query_string: str) -> None:
+            params = parse_qs(query_string)
+            try:
+                payload = service.time_to_frame(
+                    first(params, "video_id"),
+                    parse_int(first(params, "minutes", "0"), -1),
+                    parse_float(first(params, "seconds", "0"), -1.0),
+                )
+            except ValueError as exc:
+                self._error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            self._json(payload)
+
         def _handle_translate(self, query_string: str) -> None:
             params = parse_qs(query_string)
             try:
@@ -1797,19 +2508,26 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             params = parse_qs(query_string)
             try:
                 path = service.resolve_keyframe_path(first(params, "path"))
+                file_size = path.stat().st_size
             except PermissionError as exc:
                 self._error(HTTPStatus.FORBIDDEN, str(exc))
                 return
             except FileNotFoundError as exc:
                 self._error(HTTPStatus.NOT_FOUND, str(exc))
                 return
+            except OSError as exc:
+                self._error(HTTPStatus.SERVICE_UNAVAILABLE, f"keyframe storage is unavailable: {exc}")
+                return
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(path.stat().st_size))
+            self.send_header("Content-Length", str(file_size))
             self.end_headers()
             with path.open("rb") as handle:
-                self.wfile.write(handle.read())
+                while True:
+                    chunk = handle.read(64 * 1024)
+                    if not chunk or not self._write_response_body(chunk):
+                        break
 
         def _serve_video(self, query_string: str) -> None:
             params = parse_qs(query_string)
@@ -1839,7 +2557,10 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.send_header("Content-Length", str(path.stat().st_size))
             self.end_headers()
             with path.open("rb") as handle:
-                self.wfile.write(handle.read())
+                while True:
+                    chunk = handle.read(64 * 1024)
+                    if not chunk or not self._write_response_body(chunk):
+                        break
 
         def _serve_trake_static(self, relative_path: str) -> None:
             static_dir = config.trake_static_dir or (config.repo_root / "web" / "trake_ui")
@@ -1851,7 +2572,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self._error(HTTPStatus.NOT_FOUND, "TRAKE static file not found"); return
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             body = path.read_bytes()
-            self.send_response(HTTPStatus.OK); self.send_header("Content-Type", content_type); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            self.send_response(HTTPStatus.OK); self.send_header("Content-Type", content_type); self.send_header("Content-Length", str(len(body))); self.end_headers()
+            self._write_response_body(body)
 
         def _serve_submission_static(self, relative_path: str) -> None:
             static_dir = config.submission_static_dir or (config.repo_root / "web" / "submission_ui")
@@ -1870,7 +2592,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._write_response_body(body)
 
         def _serve_submission_zip(self, session_id: str) -> None:
             try:
@@ -1887,7 +2609,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.send_header("Content-Disposition", 'attachment; filename="submission.zip"')
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._write_response_body(body)
 
         def _serve_binary_file(self, path: Path, supports_range: bool = False) -> None:
             content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
@@ -1918,9 +2640,8 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                     remaining = length
                     while remaining > 0:
                         chunk = handle.read(min(1024 * 1024, remaining))
-                        if not chunk:
+                        if not chunk or not self._write_response_body(chunk):
                             break
-                        self.wfile.write(chunk)
                         remaining -= len(chunk)
                 return
             self.send_response(HTTPStatus.OK)
@@ -1930,7 +2651,19 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
                 self.send_header("Accept-Ranges", "bytes")
             self.end_headers()
             with path.open("rb") as handle:
-                self.wfile.write(handle.read())
+                while True:
+                    chunk = handle.read(64 * 1024)
+                    if not chunk or not self._write_response_body(chunk):
+                        break
+
+        def _write_response_body(self, body: bytes) -> bool:
+            try:
+                self.wfile.write(body)
+                return True
+            except OSError as exc:
+                if _is_client_disconnect_error(exc):
+                    return False
+                raise
 
         def _json(self, payload: dict[str, Any]) -> None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1938,7 +2671,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._write_response_body(body)
 
         def _request_json(self) -> dict[str, Any]:
             content_length = parse_int(self.headers.get("Content-Length", "0"), 0)
@@ -1960,7 +2693,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._write_response_body(body)
 
         def _domain_error(self, status: HTTPStatus, code: str, message: str, stage: str) -> None:
             body = json.dumps({"ok": False, "error": message, "code": code, "failure_stage": stage}, ensure_ascii=False).encode("utf-8")
@@ -1968,7 +2701,7 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._write_response_body(body)
 
     server = ThreadingHTTPServer((host, port), Handler)
     return server
@@ -1977,6 +2710,25 @@ def run_server(config: RetrievalUiConfig, host: str = "127.0.0.1", port: int = 8
 def first(params: dict[str, list[str]], key: str, default: str = "") -> str:
     values = params.get(key)
     return values[0] if values else default
+
+
+def _keyframe_url(path: Any) -> str | None:
+    if path in (None, ""):
+        return None
+    return f"/keyframe?path={quote(str(path), safe='/')}"
+
+
+def _candidate_seed_times(candidate: dict[str, Any]) -> list[float]:
+    values: list[float] = []
+    frames = candidate.get("frames")
+    if isinstance(frames, list):
+        for frame in frames:
+            if isinstance(frame, dict) and frame.get("pts_time") is not None:
+                values.append(float(frame["pts_time"]))
+    for key in ("pts_time", "best_pts_time"):
+        if candidate.get(key) is not None:
+            values.append(float(candidate[key]))
+    return sorted(set(values))
 
 
 def parse_int(value: str, default: int) -> int:
@@ -2001,6 +2753,14 @@ def parse_official_frame_id(value: Any) -> int:
 def parse_float(value: str, default: float) -> float:
     try: return float(value)
     except ValueError: return default
+
+
+def _is_client_disconnect_error(exc: OSError) -> bool:
+    return (
+        isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError))
+        or exc.errno in {22, 32, 54, 104}
+        or getattr(exc, "winerror", None) in {64, 109, 232, 10053, 10054, 10058}
+    )
 
 
 def parse_bool(value: str) -> bool:

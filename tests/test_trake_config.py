@@ -130,3 +130,14 @@ def test_vlm_never_receives_server_invalid_chain() -> None:
 
     assert result["status"] == "SKIPPED_INVALID" and result["called"] is False
     assert calls == []
+
+
+def test_opt_in_gemini_config_extends_frozen_v2_baseline() -> None:
+    baseline = load_trake_config(ROOT / "configs" / "phase8_trake_v2.json")
+    enabled = load_trake_config(ROOT / "configs" / "phase10_trake_gemini_opt_in.json")
+    assert enabled.algorithm == baseline.algorithm
+    assert enabled.temporal == baseline.temporal
+    assert enabled.reranking == baseline.reranking
+    assert enabled.vlm.enabled is True
+    assert enabled.vlm.decision_log_approved is True
+    assert enabled.features.conditional_vlm is True

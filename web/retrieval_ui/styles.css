@@ -1347,6 +1347,10 @@ dd {
   font-size: 14px;
 }
 
+#agent-clip-query {
+  white-space: pre-line;
+}
+
 .agent-run-state {
   display: inline-flex;
   min-width: 88px;

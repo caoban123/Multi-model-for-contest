@@ -17,6 +17,7 @@ import numpy as np
 from aic_retrieval.hybrid_audit import sha256_file
 from aic_retrieval.retrievers import RetrievalHit, RetrievalRequest, RetrieverHealth
 from aic_retrieval.vector_store import FaissVectorStore
+from aic_retrieval.resilient_io import open_with_retry, read_bytes_with_retry, read_text_with_retry
 
 
 BGE_INDEX_SCHEMA_VERSION = "bge-faiss-index-v1"
@@ -121,7 +122,7 @@ def _snapshot_revision(path: Path) -> str | None:
 
 def _load_documents(path: Path) -> list[dict[str, Any]]:
     documents: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as stream:
+    with open_with_retry(path, "r", encoding="utf-8") as stream:
         for line_number, line in enumerate(stream, 1):
             if not line.strip():
                 continue
@@ -185,7 +186,7 @@ def build_bge_index(
     if checkpoint_documents < 1:
         raise ValueError("checkpoint_documents must be positive")
     started = time.perf_counter()
-    corpus_manifest = json.loads(corpus_manifest_path.read_text(encoding="utf-8"))
+    corpus_manifest = json.loads(read_text_with_retry(corpus_manifest_path))
     corpus_checksum = sha256_file(corpus_path)
     if corpus_checksum != corpus_manifest.get("corpus_sha256"):
         raise ValueError("corpus checksum does not match its manifest")
@@ -225,7 +226,7 @@ def build_bge_index(
     if checkpoint_path.exists() != checkpoint_manifest_path.exists():
         raise ValueError("incomplete BGE checkpoint; rerun with restart=True")
     if checkpoint_path.exists():
-        checkpoint_manifest = json.loads(checkpoint_manifest_path.read_text(encoding="utf-8"))
+        checkpoint_manifest = json.loads(read_text_with_retry(checkpoint_manifest_path))
         if any(checkpoint_manifest.get(key) != value for key, value in checkpoint_identity.items()):
             raise ValueError("BGE checkpoint does not match corpus/model; rerun with restart=True")
         resumed_from = int(checkpoint_manifest.get("completed_documents", 0))
@@ -351,7 +352,7 @@ class BgeRetriever:
         self.index_path = self.index_dir / "vectors.faiss"
         if not self.manifest_path.is_file():
             raise FileNotFoundError(self.manifest_path)
-        self.manifest = json.loads(self.manifest_path.read_bytes().decode("utf-8"))
+        self.manifest = json.loads(read_bytes_with_retry(self.manifest_path).decode("utf-8"))
         raw_corpus = Path(str(self.manifest["corpus"]["path"]))
         self.corpus_path = raw_corpus if raw_corpus.is_absolute() else self.root / raw_corpus
         self.documents = _load_documents(self.corpus_path)
@@ -406,36 +407,41 @@ class BgeRetriever:
         query_vector = self.encoder.encode_query(request.query_text)
         needs_group_filter = active_groups != index_groups
         needs_filter = bool(source_filter or video_filter or needs_group_filter)
-        pool = self.store.count if needs_filter else min(self.store.count, request.top_k)
-        raw = self.store.search(query_vector, pool)
-        hits: list[RetrievalHit] = []
-        for item in raw:
-            document = self.documents[item.position]
-            if needs_group_filter and str(document["video_id"]).split("_", 1)[0] not in active_groups:
-                continue
-            if source_filter and str(document["source_type"]) not in source_filter:
-                continue
-            if video_filter and str(document["video_id"]) not in video_filter:
-                continue
-            hits.append(
-                RetrievalHit(
-                    retriever=self.name,
-                    rank=len(hits) + 1,
-                    raw_score=item.score,
-                    video_id=str(document["video_id"]),
-                    source_type=str(document["source_type"]),
-                    document_id=str(document["document_id"]),
-                    keyframe_id=document.get("keyframe_id"),
-                    frame_idx=document.get("frame_idx"),
-                    pts_time=document.get("pts_time"),
-                    matched_text=str(document["text"]),
-                    provenance={
-                        "content_checksum": document.get("content_checksum"),
-                        "source_field": document.get("source_field"),
-                        **dict(document.get("provenance", {})),
-                    },
+        pool = min(self.store.count, request.top_k)
+        if needs_filter:
+            pool = min(self.store.count, max(1024, request.top_k * 16))
+        while True:
+            raw = self.store.search(query_vector, pool)
+            hits: list[RetrievalHit] = []
+            for item in raw:
+                document = self.documents[item.position]
+                if needs_group_filter and str(document["video_id"]).split("_", 1)[0] not in active_groups:
+                    continue
+                if source_filter and str(document["source_type"]) not in source_filter:
+                    continue
+                if video_filter and str(document["video_id"]) not in video_filter:
+                    continue
+                hits.append(
+                    RetrievalHit(
+                        retriever=self.name,
+                        rank=len(hits) + 1,
+                        raw_score=item.score,
+                        video_id=str(document["video_id"]),
+                        source_type=str(document["source_type"]),
+                        document_id=str(document["document_id"]),
+                        keyframe_id=document.get("keyframe_id"),
+                        frame_idx=document.get("frame_idx"),
+                        pts_time=document.get("pts_time"),
+                        matched_text=str(document["text"]),
+                        provenance={
+                            "content_checksum": document.get("content_checksum"),
+                            "source_field": document.get("source_field"),
+                            **dict(document.get("provenance", {})),
+                        },
+                    )
                 )
-            )
-            if len(hits) >= request.top_k:
-                break
-        return hits
+                if len(hits) >= request.top_k:
+                    return hits
+            if not needs_filter or pool >= self.store.count:
+                return hits
+            pool = min(self.store.count, pool * 2)

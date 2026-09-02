@@ -76,6 +76,9 @@ def main() -> int:
     parser.add_argument("--groups", default="L21")
     parser.add_argument("--output", default="artifacts/structured/l21_objects.sqlite")
     parser.add_argument("--manifest", default="artifacts/structured/l21_objects_manifest.json")
+    parser.add_argument("--detection-threshold", type=float, default=None)
+    parser.add_argument("--nms-threshold", type=float, default=None)
+    parser.add_argument("--max-detections-per-frame", type=int, default=None)
     parser.add_argument(
         "--progress",
         choices=("tqdm", "json", "none"),
@@ -93,6 +96,9 @@ def main() -> int:
             Path(args.output),
             groups,
             progress=report_progress,
+            detection_threshold=args.detection_threshold,
+            nms_threshold=args.nms_threshold,
+            max_detections_per_frame=args.max_detections_per_frame,
         )
     finally:
         close_progress()

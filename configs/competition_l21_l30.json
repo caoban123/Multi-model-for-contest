@@ -1,0 +1,45 @@
+{
+  "schema_version": "aic-competition-profile-v1",
+  "name": "AIC 2026 L21-L30 competition profile",
+  "groups": [
+    "L21",
+    "L22",
+    "L23",
+    "L24",
+    "L25",
+    "L26",
+    "L27",
+    "L28",
+    "L29",
+    "L30"
+  ],
+  "paths": {
+    "registry": "artifacts/registry/data_registry_l21_l30.json",
+    "index_dir": "E:/AIC2026/artifacts/indexes/l21_l30_numpy",
+    "metadata_dir": "E:/AIC2026/data/media-info",
+    "object_store": "E:/AIC2026/artifacts/structured/l21_l30_objects.sqlite",
+    "object_aliases": "config/object_aliases_v1.json",
+    "phase5_store": "E:/AIC2026/artifacts/phase5/l21_l30_phase5.sqlite3",
+    "phase5_manifest": "E:/AIC2026/artifacts/phase5/l21_l30_phase5_manifest.json",
+    "bge_index_dir": "E:/AIC2026/artifacts/indexes/l21_l30_bge_v2",
+    "bm25_index_dir": "E:/AIC2026/artifacts/indexes/l21_l30_bm25_v2",
+    "qa_store": "artifacts/qa/phase7_qa.sqlite3",
+    "trake_store": "artifacts/trake/phase8_trake.sqlite3",
+    "dense_frame_cache": "E:/AIC2026/artifacts/cache/dense_frames"
+  },
+  "minimums": {
+    "clip_vectors": 177321,
+    "metadata_videos": 873,
+    "ocr_detections": 845478,
+    "ocr_videos": 873,
+    "bm25_documents": 292488,
+    "bge_documents": 292488
+  },
+  "runtime": {
+    "require_keyframes": true,
+    "enable_hybrid_retrieval": true,
+    "clip_local_files_only": true,
+    "bge_device": "cpu",
+    "enable_dense_frame_localization": true
+  }
+}

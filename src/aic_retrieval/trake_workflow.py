@@ -631,11 +631,22 @@ class TrakeWorkflow:
         safe_payload = _vlm_safe_payload(payload, self.runtime_config.vlm.top_n)
         if not safe_payload["chains"]:
             return {"status": "SKIPPED_INVALID", "called": False, "reason": "no server-valid chain can be sent"}
+        try:
+            result = self.vlm_verifier(safe_payload)
+        except Exception as exc:
+            return {
+                "status": "UNAVAILABLE",
+                "called": True,
+                "trigger_reasons": reasons,
+                "reason": f"VLM verifier failed: {exc}",
+                "advisory_only": True,
+                "server_selection_unchanged": True,
+            }
         return {
             "status": "AVAILABLE",
             "called": True,
             "trigger_reasons": reasons,
-            "result": self.vlm_verifier(safe_payload),
+            "result": result,
             "advisory_only": True,
             "server_selection_unchanged": True,
         }

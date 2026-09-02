@@ -34,4 +34,7 @@ Thư mục thứ 6 dự kiến là `videos`, nhưng chưa đưa vào phạm vi n
 - [Phase 7 - Q&A](./08_PHASE_7_QA.md)
 - [Phase 8 - TRAKE](./09_PHASE_8_TRAKE.md)
 - [Phase 9 - Submission và hardening](./10_PHASE_9_SUBMISSION_HARDENING.md)
-
+- [Phase 9 - Submission Agent UI replan](./11_PHASE_9_SUBMISSION_AGENT_UI_REPLAN.md)
+- [Phase 9 - Agent workspace UI redesign](./12_PHASE_9_AGENT_WORKSPACE_UI_REDESIGN.md)
+- [Phase 10B - Frame localization, VLM review and index upgrade](./14_PHASE_10B_FRAME_LOCALIZATION_VLM_INDEX_UPGRADE.md)
+- [Phase 10 - Nâng cấp chất lượng và workspace Q&A / TRAKE](./13_PHASE_10_QA_TRAKE_QUALITY_UPGRADE.md)

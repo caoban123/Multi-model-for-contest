@@ -106,6 +106,48 @@ def detection_rows(video_id: str, keyframe_id: int, payload: dict[str, Any], ali
         )
 
 
+def filter_detection_rows(
+    rows: Iterable[tuple[Any, ...]],
+    *,
+    detection_threshold: float | None = None,
+    nms_threshold: float | None = None,
+    max_detections_per_frame: int | None = None,
+) -> list[tuple[Any, ...]]:
+    """Apply deterministic confidence, per-label NMS and frame-level Top-N."""
+    if detection_threshold is not None and not 0 <= detection_threshold <= 1:
+        raise ValueError("detection_threshold must be between 0 and 1")
+    if nms_threshold is not None and not 0 <= nms_threshold <= 1:
+        raise ValueError("nms_threshold must be between 0 and 1")
+    if max_detections_per_frame is not None and max_detections_per_frame < 1:
+        raise ValueError("max_detections_per_frame must be positive")
+    selected = [row for row in rows if detection_threshold is None or float(row[5]) >= detection_threshold]
+    selected.sort(key=lambda row: (-float(row[5]), str(row[4]), str(row[2]), tuple(float(value) for value in row[6:10])))
+    if nms_threshold is not None:
+        kept: list[tuple[Any, ...]] = []
+        by_label: dict[str, list[tuple[Any, ...]]] = {}
+        for row in selected:
+            label_rows = by_label.setdefault(str(row[4]), [])
+            if any(_bbox_iou(row, existing) > nms_threshold for existing in label_rows):
+                continue
+            label_rows.append(row)
+            kept.append(row)
+        selected = kept
+    if max_detections_per_frame is not None:
+        selected = selected[:max_detections_per_frame]
+    return selected
+
+
+def _bbox_iou(left: tuple[Any, ...], right: tuple[Any, ...]) -> float:
+    ly1, lx1, ly2, lx2 = (float(value) for value in left[6:10])
+    ry1, rx1, ry2, rx2 = (float(value) for value in right[6:10])
+    intersection = max(0.0, min(ly2, ry2) - max(ly1, ry1)) * max(0.0, min(lx2, rx2) - max(lx1, rx1))
+    if intersection <= 0:
+        return 0.0
+    left_area = (ly2 - ly1) * (lx2 - lx1)
+    right_area = (ry2 - ry1) * (rx2 - rx1)
+    return intersection / max(left_area + right_area - intersection, 1e-12)
+
+
 def build_object_store(
     refs_path: Path,
     object_root: Path,
@@ -113,7 +155,16 @@ def build_object_store(
     output_path: Path,
     groups: set[str] | None = None,
     progress: Callable[[int, int, int], None] | None = None,
+    detection_threshold: float | None = None,
+    nms_threshold: float | None = None,
+    max_detections_per_frame: int | None = None,
 ) -> dict[str, Any]:
+    filter_detection_rows(
+        (),
+        detection_threshold=detection_threshold,
+        nms_threshold=nms_threshold,
+        max_detections_per_frame=max_detections_per_frame,
+    )
     refs = json.loads(refs_path.read_text(encoding="utf-8"))
     if groups:
         refs = [item for item in refs if str(item["group"]) in groups]
@@ -123,7 +174,7 @@ def build_object_store(
     if building_path.exists():
         building_path.unlink()
     connection = sqlite3.connect(building_path)
-    detection_count = available = invalid = 0
+    detection_count = source_detection_count = available = invalid = 0
     object_paths: list[Path] = []
     insert_sql = """INSERT INTO detections(video_id,keyframe_id,label_id,label_raw,label_normalized,confidence,bbox_y1,bbox_x1,bbox_y2,bbox_x2,center_x,center_y,area,source,schema_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
     try:
@@ -138,7 +189,14 @@ def build_object_store(
             if path.exists():
                 try:
                     payload = json.loads(path.read_text(encoding="utf-8"))
-                    rows = list(detection_rows(video_id, keyframe_id, payload, aliases))
+                    source_rows = list(detection_rows(video_id, keyframe_id, payload, aliases))
+                    source_detection_count += len(source_rows)
+                    rows = filter_detection_rows(
+                        source_rows,
+                        detection_threshold=detection_threshold,
+                        nms_threshold=nms_threshold,
+                        max_detections_per_frame=max_detections_per_frame,
+                    )
                     object_paths.append(path)
                     available += 1
                     source_valid = True
@@ -169,9 +227,18 @@ def build_object_store(
         "video_count": video_count,
         "frame_count": len(refs),
         "detection_count": detection_count,
+        "source_detection_count": source_detection_count,
+        "filtered_detection_count": source_detection_count - detection_count,
         "coverage": {"frames_with_object_data": available, "ratio": available / len(refs) if refs else 0.0},
         "missing_data": {"frames_unknown": len(refs) - available, "invalid_source_files": invalid, "semantics": "UNKNOWN, never NO_MATCH"},
-        "build_configuration": {"groups": sorted(groups) if groups else "all", "detection_threshold": None, "nms_threshold": None, "all_valid_detections_preserved": True},
+        "build_configuration": {
+            "groups": sorted(groups) if groups else "all",
+            "detection_threshold": detection_threshold,
+            "nms_threshold": nms_threshold,
+            "max_detections_per_frame": max_detections_per_frame,
+            "all_valid_detections_preserved": detection_threshold is None and nms_threshold is None and max_detections_per_frame is None,
+            "filter_version": "object-filter-v1",
+        },
         "sqlite_integrity_check": integrity,
         "store_size_bytes": output_path.stat().st_size,
     }

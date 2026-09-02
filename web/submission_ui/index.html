@@ -34,8 +34,9 @@
           <fieldset class="task-control"><legend>Task</legend><label><input type="radio" name="task" value="KIS" checked> KIS</label><label><input type="radio" name="task" value="QA"> Q&amp;A</label><label><input type="radio" name="task" value="TRAKE"> TRAKE</label></fieldset>
           <label class="query-field"><span>Query</span><textarea id="query" required rows="3" placeholder="person wearing a red shirt"></textarea></label>
           <label id="qa-question-wrap" class="query-field" hidden><span>Question</span><textarea id="qa-question" rows="2" placeholder="What is the person doing?"></textarea></label>
-          <div class="agent-options"><label><input id="use-hybrid" type="checkbox" checked> Hybrid retrieval</label><label><input id="use-gemini" type="checkbox" checked> Gemini planner</label><label id="gemini-answer-wrap" hidden><input id="use-gemini-answer" type="checkbox" checked> Gemini answer</label></div>
-          <button id="run-button" type="submit" disabled>Run Agent</button>
+          <div class="agent-options"><label><input id="use-hybrid" type="checkbox" checked> Hybrid retrieval</label><label><input id="use-gemini" type="checkbox" checked> Gemini planner</label><label id="dense-frame-wrap"><input id="use-dense-frames" type="checkbox" checked> Dense video frames</label><label id="gemini-answer-wrap" hidden><input id="use-gemini-answer" type="checkbox" checked> Gemini answer</label><label id="deep-frame-wrap" hidden><input id="deep-frame-search" type="checkbox" checked> Deep frame search</label><label id="gemini-frame-wrap" hidden><input id="use-gemini-frame" type="checkbox"> Gemini frame review</label></div>
+          <div id="qa-frame-settings" class="qa-frame-settings" hidden><label><span>Search radius</span><select id="frame-search-radius"><option value="20">20 seconds</option><option value="40" selected>40 seconds</option><option value="80">80 seconds</option><option value="120">120 seconds</option></select></label><label><span>Frames per video</span><select id="frame-search-limit"><option value="8">8</option><option value="12" selected>12</option><option value="20">20</option></select></label></div>
+          <div class="form-actions"><button id="run-button" type="submit" disabled>Run Agent</button><button id="reset-button" class="secondary" type="button">Reset</button></div>
         </form>
         <div id="agent-trace" class="agent-trace" hidden></div>
         <section id="agent-inspector" class="agent-inspector" hidden aria-live="polite">
@@ -44,7 +45,7 @@
             <span id="gemini-state" class="state-badge">Not called</span>
           </div>
           <div class="routed-queries">
-            <div class="clip-route"><span>CLIP visual query</span><strong id="clip-route">-</strong></div>
+            <div class="clip-route"><span>CLIP visual queries</span><strong id="clip-route">-</strong></div>
             <div class="bge-route"><span>BGE semantic query</span><strong id="bge-route">-</strong></div>
             <div class="bm25-route"><span>BM25 lexical query</span><strong id="bm25-route">-</strong></div>
           </div>
@@ -59,6 +60,7 @@
             </div>
           </details>
         </section>
+        <div id="clip-lanes" class="clip-lanes" hidden aria-label="CLIP event candidate filters"></div>
         <section id="task-workflow" class="task-workflow" hidden aria-live="polite">
           <div class="section-head"><div><span class="kicker">REVIEW WORKFLOW</span><h2 id="workflow-title">Task evidence</h2></div><span id="workflow-state" class="state-badge">Waiting</span></div>
           <div id="workflow-content"></div>
@@ -71,7 +73,10 @@
         <div class="section-head"><div><span class="kicker">OFFICIAL</span><h2>Validation</h2></div></div>
         <div id="validation-summary" class="validation-summary">Not validated</div>
         <div id="issues" class="issue-list"></div>
-        <label class="preview-field"><span>CSV preview</span><textarea id="csv-preview" readonly rows="12" spellcheck="false"></textarea></label>
+        <section class="preview-field" aria-labelledby="csv-preview-title">
+          <div class="preview-head"><span id="csv-preview-title">CSV files</span><span id="csv-file-count" class="count">0</span></div>
+          <div id="csv-preview-list" class="csv-preview-list"><p class="empty">No confirmed CSV.</p></div>
+        </section>
       </aside>
     </section>
   </main>

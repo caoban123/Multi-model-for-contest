@@ -57,6 +57,33 @@ def test_builder_is_deterministic_for_the_same_retrieval_response() -> None:
     assert [item.evidence_id for item in first.evidence_refs] == [item.evidence_id for item in second.evidence_refs]
 
 
+def test_builder_applies_modality_limit_per_video_not_globally() -> None:
+    payload = response()
+    payload["video_results"] = []
+    for video_number in range(1, 4):
+        video_id = f"L21_V{video_number:03d}"
+        payload["video_results"].append({
+            "video_id": video_id,
+            "rank": video_number,
+            "frames": [{
+                "video_id": video_id,
+                "keyframe_id": keyframe_id,
+                "frame_idx": keyframe_id * 30,
+                "pts_time": float(keyframe_id),
+                "keyframe_path": f"data/keyframes/{video_id}/{keyframe_id:03d}.jpg",
+                "evidence": {"object": [], "attribute": [], "ocr": [], "asr": []},
+            } for keyframe_id in range(1, 4)],
+        })
+
+    pack = build_evidence_pack(QaRequest("q-limit", "people", "What happens?"), payload, max_evidence_per_modality=2)
+    keyframes_by_video = {
+        video_id: [item for item in pack.evidence_refs if item.video_id == video_id and item.modality is EvidenceModality.KEYFRAME]
+        for video_id in ("L21_V001", "L21_V002", "L21_V003")
+    }
+
+    assert all(len(items) == 2 for items in keyframes_by_video.values())
+
+
 def test_builder_converts_hybrid_channel_provenance_to_typed_evidence() -> None:
     hybrid_response = {
         "mode": "agent_hybrid",

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from aic_retrieval.metadata import normalize_metadata_text
+from aic_retrieval.resilient_io import read_text_with_retry
 
 TOKEN_RE = re.compile(r"[\w]+", re.UNICODE)
 FIELD_WEIGHTS = {
@@ -89,7 +90,7 @@ def load_metadata_documents(media_dir: Path, groups: set[str] | None = None) -> 
         video_id = path.stem
         if groups and video_id.split("_", 1)[0] not in groups:
             continue
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(read_text_with_retry(path))
         docs.append(document_from_payload(video_id, payload))
     return docs
 

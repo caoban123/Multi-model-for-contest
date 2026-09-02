@@ -120,7 +120,7 @@ class OpenCvDecoder:
                     frames.append(
                         SampledFrame(
                             decoded_pts if decoded_pts >= 0 else timestamp,
-                            image[:, :, ::-1],
+                            image[:, :, ::-1].copy(),
                             requested_pts=timestamp,
                             frame_index=frame_position if frame_position >= 0 else None,
                         )
@@ -135,7 +135,7 @@ class OpenCvDecoder:
         except ImportError as exc:
             raise RuntimeError("OpenCV is not installed") from exc
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(path), image[:, :, ::-1]):
+        if not cv2.imwrite(str(path), image[:, :, ::-1].copy()):
             raise RuntimeError("refined image could not be written")
 
 
@@ -149,9 +149,11 @@ class DenseRefiner:
         *,
         decoder: Any | None = None,
         config: RefinementConfig | None = None,
+        video_resolver: Callable[[str], Path] | None = None,
     ) -> None:
         self.repo_root=repo_root.resolve(); self.assets_by_video=assets_by_video; self.cache_dir=cache_dir
         self.scorer=scorer; self.decoder=decoder or OpenCvDecoder(); self.config=config or RefinementConfig()
+        self.video_resolver = video_resolver
 
     def refine(self, *, video_id: str, event_id: str, event_text: str, source_keyframe_id: int, source_frame_idx: int, source_pts_time: float, fps: float) -> RefinementResult:
         source = self._video_path(video_id)
@@ -185,6 +187,11 @@ class DenseRefiner:
             return RefinementResult("REFINEMENT_UNAVAILABLE",video_id,event_id,source_keyframe_id,source_frame_idx,source_pts_time,None,None,None,sampling,str(exc),provenance,("REFINEMENT_UNAVAILABLE",))
 
     def _video_path(self, video_id: str) -> Path | None:
+        if self.video_resolver is not None:
+            try:
+                return self.video_resolver(video_id).resolve()
+            except (FileNotFoundError, PermissionError, OSError):
+                return None
         value=self.assets_by_video.get(video_id,{}).get("video_path")
         if not value: return None
         path=(self.repo_root/value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
@@ -210,6 +217,7 @@ class DenseWindowExpander:
         config_fingerprint: str | None = None,
         index_fingerprint: str | None = None,
         candidates_per_event: int = 12,
+        video_resolver: Callable[[str], Path] | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve()
         self.assets_by_video = assets_by_video
@@ -222,6 +230,7 @@ class DenseWindowExpander:
         self.config_fingerprint = config_fingerprint
         self.index_fingerprint = index_fingerprint
         self.candidates_per_event = candidates_per_event
+        self.video_resolver = video_resolver
 
     def expand(
         self,
@@ -384,6 +393,11 @@ class DenseWindowExpander:
             return DenseWindowExpansion("REFINEMENT_UNAVAILABLE", window.window_id, window.video_id, {}, 0, sampling, round((time.perf_counter() - started) * 1000, 3), cache_key, provenance, (str(exc),))
 
     def _video_path(self, video_id: str) -> Path | None:
+        if self.video_resolver is not None:
+            try:
+                return self.video_resolver(video_id).resolve()
+            except (FileNotFoundError, PermissionError, OSError):
+                return None
         value = self.assets_by_video.get(video_id, {}).get("video_path")
         if not value:
             return None

@@ -6,8 +6,10 @@ import urllib.request
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 import numpy as np
+import pytest
 
 import aic_retrieval.retrieval_ui as retrieval_ui
 from aic_retrieval.retrieval_ui import RetrievalUiConfig, RetrievalUiService
@@ -71,8 +73,27 @@ def test_service_kis_agent_keeps_retrieval_frame_separate_from_official_frame(tm
         [{"video_id": "L21_V001", "frame_id": 999, "mapping_source": "manual_official"}],
         source={"candidate_id": candidate["candidate_id"]},
     )
-    assert confirmed["queries"][0]["csv_preview"] == "L21_V001,999\n"
+    assert confirmed["queries"][0]["csv_preview"] == "L21_V001, 999\n"
     assert "210" not in confirmed["queries"][0]["csv_preview"]
+    for number in range(2, 5):
+        expanded_queue = service.submission_confirm(
+            session_id,
+            f"query-{number}-kis",
+            "KIS",
+            [{"video_id": f"L21_V00{number + 2}", "frame_id": number * 100, "mapping_source": "manual_official"}],
+        )
+    assert len(expanded_queue["queries"]) == 4
+    edited = service.submission_apply_csv(
+        session_id,
+        "query-1-kis",
+        "L21_V002,123\nL21_V003,456\n",
+    )
+    edited_by_id = {item["query_id"]: item for item in edited["queries"]}
+    assert edited_by_id["query-1-kis"]["csv_preview"] == "L21_V002, 123\nL21_V003, 456\n"
+    assert edited_by_id["query-1-kis"]["source"]["csv_edited"] is True
+    assert edited_by_id["query-2-kis"]["csv_preview"] == "L21_V004, 200\n"
+    assert edited_by_id["query-3-kis"]["csv_preview"] == "L21_V005, 300\n"
+    assert edited_by_id["query-4-kis"]["csv_preview"] == "L21_V006, 400\n"
     try:
         service.submission_confirm(
             session_id,
@@ -152,7 +173,7 @@ def test_reviewed_qa_and_trake_adapters_require_manual_official_frames(tmp_path:
     service.qa_workflow = SimpleNamespace(get=lambda _session_id: qa_state)
 
     qa = service.submission_import_qa(session_id, "qa-session", "review-qa", 1450, "manual_official")
-    assert qa["queries"][0]["csv_preview"] == "L21_V011,1450,short answer\n"
+    assert qa["queries"][0]["csv_preview"] == 'L21_V011, 1450, "short answer"\n'
 
     service.trake_workflow = SimpleNamespace(export=lambda *_args: {"export": {
         "query_id": "query-3-trake",
@@ -163,7 +184,7 @@ def test_reviewed_qa_and_trake_adapters_require_manual_official_frames(tmp_path:
         "events": [{"event_id": "e1", "frame_idx": 10}, {"event_id": "e2", "frame_idx": 20}],
     }})
     trake = service.submission_import_trake(session_id, "trake-session", "review-trake", [1200, 1850], "manual_official")
-    assert trake["queries"][1]["csv_preview"] == "L21_V001,1200,1850\n"
+    assert trake["queries"][1]["csv_preview"] == "L21_V001, 1200, 1850\n"
     assert "10" not in trake["queries"][1]["csv_preview"]
 
     service.submission_confirm(
@@ -182,10 +203,34 @@ def test_reviewed_qa_and_trake_adapters_require_manual_official_frames(tmp_path:
         "submission/query-2-qa.csv",
         "submission/query-3-trake.csv",
     ]
-    assert values["submission/query-1-kis.csv"] == "L21_V002,999\n"
-    assert values["submission/query-2-qa.csv"] == "L21_V011,1450,short answer\n"
-    assert values["submission/query-3-trake.csv"] == "L21_V001,1200,1850\n"
+    assert values["submission/query-1-kis.csv"] == "L21_V002, 999\n"
+    assert values["submission/query-2-qa.csv"] == 'L21_V011, 1450, "short answer"\n'
+    assert values["submission/query-3-trake.csv"] == "L21_V001, 1200, 1850\n"
     assert all("score" not in value and "provenance" not in value for value in values.values())
+
+
+def test_submission_qa_import_rejects_legacy_cross_video_review(tmp_path: Path) -> None:
+    service = RetrievalUiService.__new__(RetrievalUiService)
+    service.submission_store = SubmissionSessionStore(tmp_path / "sessions.sqlite3", tmp_path / "output")
+    submission_session_id = service.submission_start()["session_id"]
+    review = SimpleNamespace(
+        review_id="review-cross-video",
+        decision=ReviewDecision.CONFIRMED,
+        final_answer="answer",
+        selected_evidence_refs=("e1", "e2"),
+    )
+    qa_state = SimpleNamespace(
+        reviews=[review],
+        pack=SimpleNamespace(evidence_refs=(
+            SimpleNamespace(evidence_id="e1", keyframe_id=1, video_id="L21_V001"),
+            SimpleNamespace(evidence_id="e2", keyframe_id=2, video_id="L21_V002"),
+        )),
+        session=SimpleNamespace(request=SimpleNamespace(query_id="query-cross-video")),
+    )
+    service.qa_workflow = SimpleNamespace(get=lambda _session_id: qa_state)
+
+    with pytest.raises(ValueError, match="exactly one video"):
+        service.submission_import_qa(submission_session_id, "qa-session", "review-cross-video", 100, "manual_official")
 
 
 def test_submission_http_session_queue_validate_done_and_download(tmp_path: Path, monkeypatch) -> None:
@@ -202,9 +247,23 @@ def test_submission_http_session_queue_validate_done_and_download(tmp_path: Path
 
         def submission_start(self): return self.store.start()
         def submission_session(self, session_id): return self.store.get(session_id)
+        def submission_refine_candidate(self, session_id, query_id, query, video_id, **kwargs):
+            return {
+                "schema_version": "candidate-local-refinement-v1",
+                "session_id": session_id,
+                "query_id": query_id,
+                "video_id": video_id,
+                "status": "READY_FOR_REVIEW",
+                "frames": [{"keyframe_id": kwargs.get("seed_keyframe_id"), "frame_idx": 120}],
+            }
         def submission_confirm(self, session_id, query_id, task, predictions, event_count=None, source=None):
             rows = tuple(retrieval_ui.OfficialPrediction(row["video_id"], (int(row["frame_id"]),)) for row in predictions)
             return self.store.confirm_query(session_id, retrieval_ui.OfficialQuery(query_id, task, rows, event_count), mapping_sources=tuple(row["mapping_source"] for row in predictions), source=source)
+        def submission_apply_csv(self, session_id, query_id, csv_text):
+            current = self.store.get(session_id)
+            item = next(row for row in current["queries"] if row["query_id"] == query_id)
+            query = retrieval_ui.parse_official_csv(query_id, item["task"], csv_text, event_count=item["event_count"])
+            return self.store.confirm_query(session_id, query, mapping_sources=tuple("manual_official" for _ in query.predictions), source={"csv_edited": True})
         def submission_validate(self, session_id): return self.store.validate(session_id)
         def submission_done(self, session_id): return self.store.done(session_id)
         def submission_zip_path(self, session_id): return self.store.zip_path(session_id)
@@ -218,6 +277,18 @@ def test_submission_http_session_queue_validate_done_and_download(tmp_path: Path
     try:
         session = post(port, "/api/submission/session/start", {})
         session_id = session["session_id"]
+        refined = post(port, "/api/submission/candidate/refine", {
+            "session_id": session_id,
+            "query_id": "query-1-kis",
+            "query": "person entering a room",
+            "video_id": "L21_V001",
+            "seed_keyframe_id": 7,
+            "radius_seconds": 40,
+            "frame_limit": 12,
+            "use_gemini": False,
+        })
+        assert refined["video_id"] == "L21_V001"
+        assert refined["frames"][0]["keyframe_id"] == 7
         queued = post(port, "/api/submission/query/confirm", {
             "session_id": session_id,
             "query_id": "query-1-kis",
@@ -225,6 +296,12 @@ def test_submission_http_session_queue_validate_done_and_download(tmp_path: Path
             "predictions": [{"video_id": "L21_V001", "frame_id": 1234, "mapping_source": "manual_official"}],
         })
         assert queued["submission_queue"][0]["prediction_count"] == 1
+        edited = post(port, "/api/submission/query/csv", {
+            "session_id": session_id,
+            "query_id": "query-1-kis",
+            "csv_text": "L21_V002,4321\n",
+        })
+        assert edited["queries"][0]["csv_preview"] == "L21_V002, 4321\n"
         assert post(port, "/api/submission/session/validate", {"session_id": session_id})["valid"] is True
         assert post(port, "/api/submission/session/done", {"session_id": session_id})["status"] == "DONE"
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/submission/session/{session_id}/download") as response:
@@ -232,3 +309,43 @@ def test_submission_http_session_queue_validate_done_and_download(tmp_path: Path
             assert response.read(2) == b"PK"
     finally:
         server.shutdown(); server.server_close(); thread.join(timeout=2)
+
+
+def test_http_translate_and_time_to_frame_routes_are_callable(tmp_path: Path, monkeypatch) -> None:
+    class FakeService:
+        def __init__(self, config):
+            self.config = config
+            self.index = np.zeros((1, 2))
+            self.metadata_docs = []
+            self.object_service = None
+            self.attribute_service = type("A", (), {"available": False})()
+            self.translator = type("T", (), {
+                "is_configured": True,
+                "config": type("C", (), {"provider": "gemini", "model": "test-model"})(),
+            })()
+
+        def translate(self, text):
+            return {"source_text": text, "translated_text": "red shirt", "provider": "gemini", "model": "test-model"}
+
+        def time_to_frame(self, video_id, minutes, seconds):
+            return {"video_id": video_id, "minutes": minutes, "seconds": seconds, "estimated_frame_idx": 1875}
+
+    monkeypatch.setattr(retrieval_ui, "RetrievalUiService", FakeService)
+    static = tmp_path / "web"
+    static.mkdir()
+    (static / "index.html").write_text("ok", encoding="utf-8")
+    config = RetrievalUiConfig(tmp_path, tmp_path / "r", tmp_path / "i", tmp_path / "m", static, {"L21"})
+    server = retrieval_ui.run_server(config, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/translate?{urlencode({'q': 'ao do'})}") as response:
+            assert json.load(response)["translated_text"] == "red shirt"
+        params = urlencode({"video_id": "L21_V001", "minutes": 1, "seconds": 2.5})
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/time-to-frame?{params}") as response:
+            assert json.load(response)["estimated_frame_idx"] == 1875
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)

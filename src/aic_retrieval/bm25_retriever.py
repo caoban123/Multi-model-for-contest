@@ -14,6 +14,7 @@ from typing import Any, Callable, Iterator
 from aic_retrieval.hybrid_audit import sha256_file
 from aic_retrieval.phase5_schema import normalize_text
 from aic_retrieval.retrievers import RetrievalHit, RetrievalRequest, RetrieverHealth
+from aic_retrieval.resilient_io import read_text_with_retry
 
 
 BM25_INDEX_SCHEMA_VERSION = "bm25-sqlite-fts5-v1"
@@ -72,7 +73,7 @@ def build_bm25_index(
     progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    corpus_manifest = json.loads(corpus_manifest_path.read_text(encoding="utf-8"))
+    corpus_manifest = json.loads(read_text_with_retry(corpus_manifest_path))
     corpus_checksum = sha256_file(corpus_path)
     if corpus_checksum != corpus_manifest.get("corpus_sha256"):
         raise ValueError("corpus checksum does not match its manifest")
@@ -229,7 +230,7 @@ class Bm25Retriever:
         self.manifest_path = self.index_dir / "manifest.json"
         if not self.manifest_path.is_file():
             raise FileNotFoundError(self.manifest_path)
-        self.manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.manifest = json.loads(read_text_with_retry(self.manifest_path))
         raw_database = Path(str(self.manifest["database"]["path"]))
         raw_corpus = Path(str(self.manifest["corpus"]["path"]))
         self.database_path = raw_database if raw_database.is_absolute() else self.root / raw_database

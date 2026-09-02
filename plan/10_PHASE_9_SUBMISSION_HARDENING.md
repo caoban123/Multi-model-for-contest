@@ -1,4 +1,4 @@
-# Phase 9 - Submission Và Hardening
+    # Phase 9 - Submission Và Hardening
 
 ## Mục tiêu
 
@@ -36,11 +36,3 @@ Chuẩn bị hệ thống sẵn sàng cho vòng sơ tuyển, có thể export, v
 - Không phụ thuộc đường dẫn cá nhân.
 - Có recovery plan cho index, registry và config.
 - Có danh sách rõ dữ liệu chưa tải, đặc biệt là video và keyframes ngoài L21.
-
-## Status update - 2026-08-19
-
-- Added internal submission schema `aic-internal-submission-v1`.
-- Added validator for duplicate query/video/frame rows, empty submissions, missing answer, and missing evidence ids.
-- Added Q&A export adapter from confirmed `qa_exports` records to internal JSONL/CSV.
-- Added runbook: `docs/PHASE9_SUBMISSION_HARDENING.md`.
-- Official BTC adapter is still pending until the organizer publishes the final format.

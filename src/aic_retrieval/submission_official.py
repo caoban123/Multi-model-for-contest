@@ -103,6 +103,13 @@ def csv_row(task: str, prediction: OfficialPrediction) -> tuple[str | int, ...]:
     return (prediction.video_id, *prediction.frame_ids)
 
 
+def format_official_csv_row(task: str, prediction: OfficialPrediction) -> str:
+    if task == "QA":
+        answer = (prediction.answer or "").replace('"', '""')
+        return f'{prediction.video_id}, {prediction.frame_ids[0]}, "{answer}"'
+    return ", ".join(str(value) for value in csv_row(task, prediction))
+
+
 def write_official_csv(query: OfficialQuery, path: Path) -> None:
     issues = validate_official_query(query)
     if has_errors(issues):
@@ -110,9 +117,8 @@ def write_official_csv(query: OfficialQuery, path: Path) -> None:
         raise ValueError(f"official query validation failed: {codes}")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle, lineterminator="\n")
         for prediction in query.predictions:
-            writer.writerow(csv_row(query.task, prediction))
+            handle.write(format_official_csv_row(query.task, prediction) + "\n")
 
 
 def render_official_csv(query: OfficialQuery) -> str:
@@ -120,11 +126,57 @@ def render_official_csv(query: OfficialQuery) -> str:
     if has_errors(issues):
         codes = ", ".join(issue.code for issue in issues if issue.severity == "ERROR")
         raise ValueError(f"official query validation failed: {codes}")
-    handle = io.StringIO(newline="")
-    writer = csv.writer(handle, lineterminator="\n")
-    for prediction in query.predictions:
-        writer.writerow(csv_row(query.task, prediction))
-    return handle.getvalue()
+    return "".join(format_official_csv_row(query.task, prediction) + "\n" for prediction in query.predictions)
+
+
+def parse_official_csv(
+    query_id: str,
+    task: str,
+    content: str,
+    *,
+    event_count: int | None = None,
+) -> OfficialQuery:
+    normalized_task = task.strip().upper()
+    if normalized_task not in TASK_SUFFIX:
+        raise ValueError(f"unsupported task: {normalized_task}")
+    if not content or not content.strip():
+        raise ValueError("CSV content must not be empty")
+    if "\x00" in content:
+        raise ValueError("CSV content contains an invalid NUL character")
+
+    try:
+        rows = list(csv.reader(io.StringIO(content, newline=""), strict=True, skipinitialspace=True))
+    except csv.Error as exc:
+        raise ValueError(f"invalid CSV syntax: {exc}") from exc
+    if not rows or len(rows) > MAX_PREDICTIONS:
+        raise ValueError(f"CSV requires 1-{MAX_PREDICTIONS} rows")
+
+    predictions: list[OfficialPrediction] = []
+    expected_columns = 3 if normalized_task == "QA" else (event_count + 1 if normalized_task == "TRAKE" and event_count else 2)
+    for row_index, row in enumerate(rows, start=1):
+        if len(row) != expected_columns:
+            raise ValueError(f"CSV row {row_index} requires exactly {expected_columns} columns for {normalized_task}")
+        video_id = row[0].strip()
+        frame_cells = row[1:2] if normalized_task in {"KIS", "QA"} else row[1:]
+        frame_ids: list[int] = []
+        for value in frame_cells:
+            normalized = value.strip()
+            if not normalized.isdigit():
+                raise ValueError(f"CSV row {row_index} contains an invalid frame_id: {value!r}")
+            frame_ids.append(int(normalized))
+        answer = row[2] if normalized_task == "QA" else None
+        predictions.append(OfficialPrediction(video_id, tuple(frame_ids), answer))
+
+    query = OfficialQuery(query_id, normalized_task, tuple(predictions), event_count)
+    issues = validate_official_query(query)
+    if has_errors(issues):
+        details = "; ".join(
+            f"{issue.code}{f' row {issue.row_index + 1}' if issue.row_index is not None else ''}: {issue.message}"
+            for issue in issues
+            if issue.severity == "ERROR"
+        )
+        raise ValueError(f"official CSV validation failed: {details}")
+    return query
 
 
 def build_submission_zip(queries: Iterable[OfficialQuery], output_dir: Path) -> Path:

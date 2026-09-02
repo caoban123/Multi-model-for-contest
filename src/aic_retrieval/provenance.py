@@ -5,14 +5,12 @@ import json
 from pathlib import Path
 from typing import Iterable
 
+from aic_retrieval.resilient_io import sha256_file_with_retry
+
 
 def sha256_file(path: Path) -> str:
     """Return a content fingerprint without loading a whole source file into memory."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_file_with_retry(path)
 
 
 def fingerprint_paths(paths: Iterable[Path], root: Path | None = None) -> str:

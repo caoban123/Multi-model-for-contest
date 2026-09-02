@@ -16,6 +16,15 @@ class Encoder:
         return np.asarray([1.0, 0.0], dtype=np.float32)
 
 
+class BatchEncoder(Encoder):
+    def __init__(self) -> None:
+        self.batches: list[list[str]] = []
+
+    def encode_texts(self, texts: list[str]) -> np.ndarray:
+        self.batches.append(list(texts))
+        return np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+
+
 def test_clip_adapter_searches_filters_and_preserves_frame_provenance(tmp_path: Path) -> None:
     index_dir = tmp_path / "index"
     refs = [
@@ -75,3 +84,29 @@ def test_clip_adapter_accepts_required_keyframe_index_contract(tmp_path: Path) -
     )
 
     assert retriever.health().details["groups"] == ("L21",)
+
+
+def test_clip_adapter_batches_multi_query_encoding(tmp_path: Path) -> None:
+    index_dir = tmp_path / "index"
+    save_numpy_index(
+        index_dir,
+        np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        [
+            FrameRef("L21_V001", "L21", 1, 10, 0.5, 20.0, "one.jpg"),
+            FrameRef("L21_V002", "L21", 2, 20, 1.0, 20.0, "two.jpg"),
+        ],
+        {"groups": ["L21"]},
+    )
+    registry = tmp_path / "registry.json"
+    registry.write_text(json.dumps({"videos": []}), encoding="utf-8")
+    encoder = BatchEncoder()
+    retriever = ClipRetriever(tmp_path, index_dir, registry, encoder, allow_stale_index=True)
+
+    result = retriever.search_many([
+        RetrievalRequest("q1", "inside a car", top_k=1),
+        RetrievalRequest("q2", "white car turning", top_k=1),
+    ])
+
+    assert encoder.batches == [["inside a car", "white car turning"]]
+    assert result[0][0].video_id == "L21_V001"
+    assert result[1][0].video_id == "L21_V002"
